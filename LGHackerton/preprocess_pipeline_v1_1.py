@@ -535,9 +535,10 @@ class SampleWindowizer:
 
     def build_patch_train(
             self, df: pd.DataFrame
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Build PatchTST training windows with identifiers."""
         d = df.sort_values([SERIES_COL, DATE_COL]).copy()
-        X_list, Y_list, D_list = [], [], []
+        X_list, Y_list, S_list, D_list = [], [], [], []
         for sid, g in d.groupby(SERIES_COL, sort=False):
             g = g.reset_index(drop=True)
             # windows
@@ -549,18 +550,21 @@ class SampleWindowizer:
                     continue
                 X_list.append(x_window.reshape(self.L, 1))
                 Y_list.append(y_vec)
+                S_list.append(sid)
                 D_list.append(g.loc[t + self.H, DATE_COL])
         if not X_list:
             raise RuntimeError("No PatchTST training windows produced.")
         vprint(f"[PATCH/TRAIN] windows={len(X_list)}")
 
         dates = np.array(D_list, dtype="datetime64[ns]")
+        sids = np.array(S_list, dtype=object)
         order = np.argsort(dates)
         X_arr = np.stack(X_list, axis=0)[order]
         Y_arr = np.stack(Y_list, axis=0)[order]
+        sids = sids[order]
         dates = dates[order]
 
-        return X_arr, Y_arr, dates
+        return X_arr, Y_arr, sids, dates
 
     def build_patch_eval(
             self, df_eval: pd.DataFrame
@@ -679,7 +683,7 @@ class Preprocessor:
     def build_lgbm_eval(self, df_eval_full: pd.DataFrame) -> pd.DataFrame:
         return self.windowizer.build_lgbm_eval(df_eval_full, self.feature_cols)
 
-    def build_patch_train(self, df_full: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def build_patch_train(self, df_full: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         return self.windowizer.build_patch_train(df_full)
 
     def build_patch_eval(self, df_eval_full: pd.DataFrame) -> Tuple[np.ndarray, List[Tuple[str, pd.Timestamp]]]:

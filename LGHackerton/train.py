@@ -27,7 +27,7 @@ def main():
     pp.save(ARTIFACTS_PATH)
 
     lgbm_train = pp.build_lgbm_train(df_full)
-    X_train, y_train, label_dates = pp.build_patch_train(df_full)
+    X_train, y_train, series_ids, label_dates = pp.build_patch_train(df_full)
 
     lgb_params = LGBMParams(**LGBM_PARAMS)
     cfg = TrainConfig(**TRAIN_CFG)
@@ -37,7 +37,7 @@ def main():
     if TORCH_OK:
         patch_params = PatchTSTParams(**PATCH_PARAMS)
         pt_tr = PatchTSTTrainer(params=patch_params, L=L, H=H, model_dir=cfg.model_dir)
-        pt_tr.train(X_train, y_train, label_dates, cfg)
+        pt_tr.train(X_train, y_train, series_ids, label_dates, cfg)
 
 if __name__ == "__main__":
     main()

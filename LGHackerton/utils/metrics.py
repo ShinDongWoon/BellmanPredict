@@ -16,8 +16,11 @@ def smape(y_true: np.ndarray, y_pred: np.ndarray, eps: float = 0.0) -> float:
 
 def weighted_smape_np(y_true: np.ndarray, y_pred: np.ndarray,
                       outlet_names: Optional[Iterable[str]] = None,
-                      priority_weight: float = 3.0) -> float:
+                      priority_weight: float = 3.0,
+                      eps: float = 0.0) -> float:
     denom = (np.abs(y_true) + np.abs(y_pred)) / 2.0
+    if eps > 0:
+        denom = denom + eps
     mask = denom > 0
     sm = np.zeros_like(y_true, dtype=float)
     sm[mask] = np.abs(y_true[mask] - y_pred[mask]) / denom[mask]
