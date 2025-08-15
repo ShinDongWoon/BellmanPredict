@@ -44,7 +44,7 @@ class LGBMTrainer(BaseModel):
         folds: List[Tuple[np.ndarray, np.ndarray]] = []
         if len(dates) == 0:
             return folds
-        purge_days = L + H if cfg.purge_mode == "L+H" else L
+        purge_days = cfg.purge_days if getattr(cfg, "purge_days", 0) > 0 else (L + H if cfg.purge_mode == "L+H" else L)
         purge = np.timedelta64(purge_days, 'D')
         for i in range(cfg.n_folds):
             end = dates[-1] - np.timedelta64(i * cfg.cv_stride, 'D')

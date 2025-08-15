@@ -13,9 +13,16 @@ class TrainConfig:
     use_weighted_loss:bool=False
     use_asinh_target:bool=False
     model_dir:str="./artifacts"
-    val_ratio:float=0.2
-    min_val_days:int=28
-    purge_mode:str="L"
+    # validation control
+    val_policy:str="ratio"          # "ratio", "span", "rocv"
+    val_ratio:float=0.2              # used when val_policy == "ratio"
+    val_span_days:int=28             # used when val_policy == "span"
+    rocv_n_folds:int=3               # rolling-origin CV folds
+    rocv_stride_days:int=7           # step between ROCV folds
+    rocv_val_span_days:int=7         # validation span for each ROCV fold
+    purge_days:int=0                 # explicit purge gap (0 -> derive from purge_mode)
+    min_val_samples:int=28           # minimum validation samples per fold
+    purge_mode:str="L"               # fallback for legacy behaviour
 
 class BaseModel(ABC):
     def __init__(self, model_params: Dict[str, Any], model_dir: str):
