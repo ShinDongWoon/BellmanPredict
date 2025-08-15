@@ -20,6 +20,8 @@ ARTIFACTS_PATH  = str((ARTIFACTS_DIR / "preprocess_artifacts.pkl").resolve())
 LGBM_EVAL_OUT   = str((ARTIFACTS_DIR / "eval_lgbm.csv").resolve())
 # PatchTST는 prefix를 요구하므로 확장자 없이 파일명만 제공
 PATCH_EVAL_OUT  = str((ARTIFACTS_DIR / "patch_eval").resolve())
+# PatchTST 예측 결과 저장 경로
+PATCH_PRED_OUT  = str((ARTIFACTS_DIR / "eval_patch.csv").resolve())
 
 # 하이퍼파라미터(필요 시 그대로 유지)
 LGBM_PARAMS = dict(
