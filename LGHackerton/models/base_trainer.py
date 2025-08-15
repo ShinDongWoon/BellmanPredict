@@ -10,6 +10,7 @@ class TrainConfig:
     n_folds:int=3
     cv_stride:int=7
     priority_weight:float=3.0
+    use_weighted_loss:bool=False
     use_asinh_target:bool=False
     model_dir:str="./artifacts"
     val_ratio:float=0.2

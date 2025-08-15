@@ -39,6 +39,7 @@ PATCH_PARAMS = dict(
 TRAIN_CFG = dict(
     seed=42, n_folds=3, cv_stride=7,
     priority_weight=3.0,
+    use_weighted_loss=False,
     use_asinh_target=False,
     model_dir=MODEL_DIR,
     val_ratio=0.2,
