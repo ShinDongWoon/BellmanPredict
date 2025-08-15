@@ -41,4 +41,7 @@ TRAIN_CFG = dict(
     priority_weight=3.0,
     use_asinh_target=False,
     model_dir=MODEL_DIR,
+    val_ratio=0.2,
+    min_val_days=28,
+    purge_mode="L",
 )
