@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, json
+import os, json, warnings
 import numpy as np
 from dataclasses import dataclass, asdict
 from typing import Tuple, Iterable, Optional, List, Any
@@ -125,15 +125,34 @@ class PatchTSTTrainer(BaseModel):
             return slices
         if cfg.val_policy == "ratio":
             n_val = max(min_samples, int(cfg.val_ratio * n))
-            n_val = min(n_val, n-1)
+            n_val = min(n_val, n - 1)
             cutoff_date = label_dates[-n_val]
             va_mask = label_dates >= cutoff_date
             tr_mask = label_dates < (cutoff_date - purge)
             if tr_mask.sum() > 0 and va_mask.sum() >= min_samples:
                 folds = [(tr_mask, va_mask)]
+            else:
+                purge_win = cfg.purge_days if cfg.purge_days > 0 else (
+                    self.L + self.H if cfg.purge_mode == "L+H" else self.L
+                )
+                purge_win = max(1, purge_win)
+                n_val = min(n_val, n - purge_win - 1)
+                if n_val < min_samples:
+                    if n - purge_win - 1 >= min_samples:
+                        n_val = min_samples
+                    else:
+                        warnings.warn(
+                            f"Validation set only {n_val} samples; minimum is {min_samples}"
+                        )
+                n_tr = max(1, n - n_val - purge_win)
+                idx = np.arange(n)
+                tr_mask = idx < n_tr
+                va_mask = idx >= n_tr + purge_win
+                if tr_mask.sum() > 0 and va_mask.sum() > 0:
+                    folds = [(tr_mask, va_mask)]
         elif cfg.val_policy == "span":
             end = label_dates[-1]
-            start = end - np.timedelta64(cfg.val_span_days-1, 'D')
+            start = end - np.timedelta64(cfg.val_span_days - 1, "D")
             va_mask = label_dates >= start
             if va_mask.sum() < min_samples:
                 start = label_dates[-min_samples]
@@ -141,6 +160,22 @@ class PatchTSTTrainer(BaseModel):
             tr_mask = label_dates < (start - purge)
             if tr_mask.sum() > 0 and va_mask.sum() >= min_samples:
                 folds = [(tr_mask, va_mask)]
+            else:
+                purge_win = cfg.purge_days if cfg.purge_days > 0 else (
+                    self.L + self.H if cfg.purge_mode == "L+H" else self.L
+                )
+                purge_win = max(1, purge_win)
+                n_val = min(min_samples, n - purge_win - 1)
+                if n_val < min_samples and n - purge_win - 1 < min_samples:
+                    warnings.warn(
+                        f"Validation set only {n_val} samples; minimum is {min_samples}"
+                    )
+                n_tr = max(1, n - n_val - purge_win)
+                idx = np.arange(n)
+                tr_mask = idx < n_tr
+                va_mask = idx >= n_tr + purge_win
+                if tr_mask.sum() > 0 and va_mask.sum() > 0:
+                    folds = [(tr_mask, va_mask)]
         elif cfg.val_policy == "rocv":
             span = cfg.rocv_val_span_days
             n_folds = cfg.rocv_n_folds
