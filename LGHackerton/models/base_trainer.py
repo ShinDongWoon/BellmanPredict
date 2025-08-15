@@ -12,6 +12,9 @@ class TrainConfig:
     priority_weight:float=3.0
     use_asinh_target:bool=False
     model_dir:str="./artifacts"
+    val_ratio:float=0.2
+    min_val_days:int=28
+    purge_mode:str="L"
 
 class BaseModel(ABC):
     def __init__(self, model_params: Dict[str, Any], model_dir: str):

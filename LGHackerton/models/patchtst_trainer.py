@@ -88,17 +88,18 @@ class PatchTSTTrainer(BaseModel):
         self._ensure_torch(); import torch
         os.makedirs(self.model_dir, exist_ok=True)
         order = np.argsort(label_dates)
-        X_train = X_train[order]; y_train = y_train[order]; label_dates = label_dates[order]
-        cutoff = label_dates[int(len(label_dates) * 0.8)]
-        purge = np.timedelta64(self.L, 'D')
-        tr_mask = label_dates < (cutoff - purge)
-        va_mask = label_dates >= cutoff
-        if tr_mask.sum() == 0 or va_mask.sum() == 0:
-            n = len(label_dates)
-            n_val = max(1, int(0.2 * n))
-            n_tr = n - n_val
-            tr_mask = np.arange(n) < n_tr
-            va_mask = np.arange(n) >= n_tr
+        X_train = X_train[order]
+        y_train = y_train[order]
+        label_dates = label_dates[order]
+        n = len(label_dates)
+        idx = np.arange(n)
+        purge_win = self.L + self.H if cfg.purge_mode == "L+H" else self.L
+        n_val = max(cfg.min_val_days, int(cfg.val_ratio * n))
+        n_tr = max(1, n - n_val - purge_win)
+        tr_mask = idx < n_tr
+        va_mask = idx >= n_tr + purge_win
+        assert tr_mask.sum() > 0 and va_mask.sum() > 0
+        assert label_dates[tr_mask].max() < label_dates[va_mask].min() - np.timedelta64(purge_win, "D")
         tr_ds = _SeriesDataset(X_train[tr_mask], y_train[tr_mask])
         va_ds = _SeriesDataset(X_train[va_mask], y_train[va_mask])
         tr_loader = DataLoader(tr_ds, batch_size=self.params.batch_size, shuffle=True)
