@@ -9,6 +9,7 @@ from typing import Dict, List, Tuple
 import lightgbm as lgb
 from models.base_trainer import BaseModel, TrainConfig
 from utils.metrics import lgbm_weighted_smape
+from preprocess_pipeline_v1_1 import L
 PRIORITY_OUTLETS = {"담하", "미라시아"}
 
 @dataclass
@@ -43,18 +44,20 @@ class LGBMTrainer(BaseModel):
         folds: List[Tuple[np.ndarray, np.ndarray]] = []
         if len(dates) == 0:
             return folds
+        purge = np.timedelta64(L, 'D')
         for i in range(cfg.n_folds):
-            end = dates[-1] - np.timedelta64(i*cfg.cv_stride, 'D')
-            start = end - np.timedelta64(cfg.cv_stride-1, 'D')
+            end = dates[-1] - np.timedelta64(i * cfg.cv_stride, 'D')
+            start = end - np.timedelta64(cfg.cv_stride - 1, 'D')
             val_mask = (df_h[date_col] >= start) & (df_h[date_col] <= end)
-            train_mask = (df_h[date_col] < start)
+            train_mask = df_h[date_col] < (start - purge)
             if val_mask.sum() > 0 and train_mask.sum() > 0:
-                folds.append((val_mask.values == False, val_mask.values))
+                folds.append((train_mask.values, val_mask.values))
         if not folds:
             end = dates[-1]
-            start = end - np.timedelta64(cfg.cv_stride-1, 'D')
+            start = end - np.timedelta64(cfg.cv_stride - 1, 'D')
             val_mask = (df_h[date_col] >= start) & (df_h[date_col] <= end)
-            folds.append((val_mask.values == False, val_mask.values))
+            train_mask = df_h[date_col] < (start - purge)
+            folds.append((train_mask.values, val_mask.values))
         return folds
 
     def train(self, df_train: pd.DataFrame, cfg: TrainConfig) -> None:
