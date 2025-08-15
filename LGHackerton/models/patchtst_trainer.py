@@ -8,7 +8,7 @@ from typing import Tuple
 try:
     import torch
     import torch.nn as nn
-    from torch.utils.data import Dataset, DataLoader, random_split
+    from torch.utils.data import Dataset, DataLoader
     TORCH_OK = True
 except Exception as _e:
     TORCH_OK = False
@@ -84,14 +84,25 @@ class PatchTSTTrainer(BaseModel):
         self.model=None; self.device="cpu"
     def _ensure_torch(self):
         if not TORCH_OK: raise RuntimeError(f"PyTorch not available: {_TORCH_ERR}")
-    def train(self, X_train: np.ndarray, y_train: np.ndarray, cfg: TrainConfig) -> None:
+    def train(self, X_train: np.ndarray, y_train: np.ndarray, label_dates: np.ndarray, cfg: TrainConfig) -> None:
         self._ensure_torch(); import torch
         os.makedirs(self.model_dir, exist_ok=True)
-        ds = _SeriesDataset(X_train, y_train)
-        n=len(ds); n_val=max(1,int(0.2*n)); n_tr=n-n_val
-        tr_ds, va_ds = torch.utils.data.random_split(ds,[n_tr,n_val],generator=torch.Generator().manual_seed(cfg.seed))
-        tr_loader = torch.utils.data.DataLoader(tr_ds, batch_size=self.params.batch_size, shuffle=True)
-        va_loader = torch.utils.data.DataLoader(va_ds, batch_size=self.params.batch_size, shuffle=False)
+        order = np.argsort(label_dates)
+        X_train = X_train[order]; y_train = y_train[order]; label_dates = label_dates[order]
+        cutoff = label_dates[int(len(label_dates) * 0.8)]
+        purge = np.timedelta64(self.L, 'D')
+        tr_mask = label_dates < (cutoff - purge)
+        va_mask = label_dates >= cutoff
+        if tr_mask.sum() == 0 or va_mask.sum() == 0:
+            n = len(label_dates)
+            n_val = max(1, int(0.2 * n))
+            n_tr = n - n_val
+            tr_mask = np.arange(n) < n_tr
+            va_mask = np.arange(n) >= n_tr
+        tr_ds = _SeriesDataset(X_train[tr_mask], y_train[tr_mask])
+        va_ds = _SeriesDataset(X_train[va_mask], y_train[va_mask])
+        tr_loader = DataLoader(tr_ds, batch_size=self.params.batch_size, shuffle=True)
+        va_loader = DataLoader(va_ds, batch_size=self.params.batch_size, shuffle=False)
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         net = PatchTSTNet(self.L,self.H,self.params.d_model,self.params.n_heads,self.params.depth,
                           self.params.patch_len,self.params.stride,self.params.dropout).to(self.device)
