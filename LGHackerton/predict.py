@@ -6,7 +6,7 @@ import pandas as pd
 
 sys.path.append("/mnt/data")
 try:
-    from preprocess_pipeline_v1_1Legacy import Preprocessor, L, H
+    from preprocess_pipeline_v1_1 import Preprocessor, L, H
 except Exception as e:
     raise RuntimeError("preprocess_pipeline_v1_1.py를 /mnt/data에 두세요.") from e
 
