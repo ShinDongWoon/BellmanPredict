@@ -189,16 +189,27 @@ class PatchTSTTrainer(BaseModel):
                         xb, yb = xb.to(self.device), yb.to(self.device)
                         out = net(xb)
                         P.append(out.cpu().numpy()); T.append(yb.cpu().numpy()); S.extend(sb)
-                y_pred = np.clip(np.concatenate(P,0),0,None); y_true = np.concatenate(T,0)
-                outlets = [sid.split("::")[0] for sid in S]
+                y_pred = np.clip(np.concatenate(P,0),0,None)
+                y_true = np.concatenate(T,0)
+                series_ids_val = np.array(S)
+                outlets = [sid.split("::")[0] for sid in series_ids_val]
                 eps = 1e-8
-                w_val = weighted_smape_np(y_true.ravel(), y_pred.ravel(), outlets, cfg.priority_weight, eps)
+                w_val = weighted_smape_np(
+                    y_true.ravel(),
+                    y_pred.ravel(),
+                    np.repeat(outlets, self.H),
+                    cfg.priority_weight,
+                    eps,
+                )
                 s_val = smape(y_true.ravel(), y_pred.ravel(), eps)
+                mae_val = float(np.mean(np.abs(y_true - y_pred)))
                 if w_val + 1e-8 < best:
                     best = w_val; best_state = net.state_dict(); bad = 0
                 else:
                     bad += 1
-                print(f"Fold {i} Epoch {ep}: wSMAPE={w_val:.4f} SMAPE={s_val:.4f}")
+                print(
+                    f"Fold {i} Epoch {ep}: wSMAPE={w_val:.4f} SMAPE={s_val:.4f} MAE={mae_val:.4f}"
+                )
                 if bad >= self.params.patience:
                     break
             if best_state is not None:

@@ -22,12 +22,13 @@ def weighted_smape_np(y_true: np.ndarray, y_pred: np.ndarray,
     if eps > 0:
         denom = denom + eps
     mask = denom > 0
+    if not np.any(mask):
+        return 0.0
     sm = np.zeros_like(y_true, dtype=float)
     sm[mask] = np.abs(y_true[mask] - y_pred[mask]) / denom[mask]
     if outlet_names is None:
-        return float(np.mean(sm[mask])) if np.any(mask) else 0.0
-    import numpy as np
-    outlets = np.array(list(outlet_names))
+        return float(np.mean(sm[mask]))
+    outlets = np.asarray(list(outlet_names))
     w = np.where(np.isin(outlets, list(PRIORITY_OUTLETS)), priority_weight, 1.0).astype(float)
     w = np.where(mask, w, 0.0)
     if w.sum() <= 0:
