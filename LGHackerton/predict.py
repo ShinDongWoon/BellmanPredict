@@ -55,7 +55,7 @@ def main():
         out["yhat_patch"]=np.nan; out["yhat_ens_median"]=out["yhat_lgbm"]
 
     os.makedirs(os.path.dirname(LGBM_EVAL_OUT), exist_ok=True)
-    out.to_csv(os.path.join(os.path.dirname(LGBM_EVAL_OUT), "predictions.csv"), index=False, encoding="utf-8-sig")
+    out.to_csv(LGBM_EVAL_OUT, index=False, encoding="utf-8-sig")
 
 if __name__ == "__main__":
     main()
