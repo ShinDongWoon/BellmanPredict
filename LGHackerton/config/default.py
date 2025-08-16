@@ -8,7 +8,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # 데이터 파일 위치(배포시 함께 넣는 상대 경로)
 DATA_DIR = PROJECT_ROOT / "data"
 TRAIN_PATH = str((DATA_DIR / "train.csv").resolve())
-EVAL_PATH  = str((DATA_DIR / "TEST_00.csv").resolve())
+TEST_DIR = DATA_DIR
+TEST_GLOB = str((TEST_DIR / "TEST_*.csv").resolve())
+# EVAL_PATH  = str((DATA_DIR / "TEST_00.csv").resolve())
 
 # 산출물 저장 루트(자동 생성)
 ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
