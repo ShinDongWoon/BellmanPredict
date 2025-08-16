@@ -14,8 +14,8 @@ except Exception as _e:
     TORCH_OK = False
     _TORCH_ERR = _e
 
-from models.base_trainer import BaseModel, TrainConfig
-from utils.metrics import smape, weighted_smape_np, PRIORITY_OUTLETS
+from .base_trainer import BaseModel, TrainConfig
+from ..utils.metrics import smape, weighted_smape_np, PRIORITY_OUTLETS
 
 @dataclass
 class PatchTSTParams:

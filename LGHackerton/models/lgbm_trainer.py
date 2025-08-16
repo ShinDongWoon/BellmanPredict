@@ -7,9 +7,9 @@ from dataclasses import dataclass, asdict
 from typing import Dict, List, Tuple, Any
 
 import lightgbm as lgb
-from models.base_trainer import BaseModel, TrainConfig
-from utils.metrics import lgbm_weighted_smape
-from preprocess_pipeline_v1_1 import L, H
+from .base_trainer import BaseModel, TrainConfig
+from ..utils.metrics import lgbm_weighted_smape
+from ..preprocess import L, H
 PRIORITY_OUTLETS = {"담하", "미라시아"}
 
 @dataclass

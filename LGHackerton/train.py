@@ -1,19 +1,15 @@
 
 from __future__ import annotations
-import os, sys
+import os
 import random
 import numpy as np
 import pandas as pd
 
-try:
-    from preprocess_pipeline_v1_1 import Preprocessor, DATE_COL, SERIES_COL, SALES_COL, L, H
-except Exception as e:
-    raise RuntimeError("preprocess_pipeline_v1_1.py를 /mnt/data에 두세요.") from e
-
-from models.base_trainer import TrainConfig
-from models.lgbm_trainer import LGBMParams, LGBMTrainer
-from models.patchtst_trainer import PatchTSTParams, PatchTSTTrainer, TORCH_OK
-from config.default import (
+from .preprocess import Preprocessor, DATE_COL, SERIES_COL, SALES_COL, L, H
+from .models.base_trainer import TrainConfig
+from .models.lgbm_trainer import LGBMParams, LGBMTrainer
+from .models.patchtst_trainer import PatchTSTParams, PatchTSTTrainer, TORCH_OK
+from .config.default import (
     TRAIN_PATH,
     ARTIFACTS_PATH,
     LGBM_PARAMS,
