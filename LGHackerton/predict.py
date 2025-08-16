@@ -15,6 +15,8 @@ from .config.default import (
     TEST_GLOB,
     ARTIFACTS_PATH,
     LGBM_EVAL_OUT,
+    SAMPLE_SUB_PATH,
+    SUBMISSION_OUT,
     LGBM_PARAMS,
     PATCH_PARAMS,
     TRAIN_CFG,
@@ -41,6 +43,18 @@ def _read_table(path: str) -> pd.DataFrame:
     if path.lower().endswith((".xls", ".xlsx")):
         return pd.read_excel(path)
     raise ValueError("Unsupported file type. Use .csv or .xlsx")
+
+
+def convert_to_submission(pred_df: pd.DataFrame, sample_path: str) -> pd.DataFrame:
+    sample_df = _read_table(sample_path)
+    pred_dict = {(row.date, row.series_id): row.yhat_ens for row in pred_df.itertuples()}
+    date_col = sample_df.columns[0]
+    out_df = sample_df.copy()
+    for idx, row in out_df.iterrows():
+        date = row[date_col]
+        for col in out_df.columns[1:]:
+            out_df.at[idx, col] = pred_dict.get((date, col), 0.0)
+    return out_df
 
 def main():
     pp = Preprocessor(); pp.load(ARTIFACTS_PATH)
@@ -97,7 +111,11 @@ def main():
         all_outputs.append(out)
 
     os.makedirs(os.path.dirname(LGBM_EVAL_OUT), exist_ok=True)
-    pd.concat(all_outputs, ignore_index=True).to_csv(LGBM_EVAL_OUT, index=False, encoding="utf-8-sig")
+    all_pred = pd.concat(all_outputs, ignore_index=True)
+    all_pred.to_csv(LGBM_EVAL_OUT, index=False, encoding="utf-8-sig")
+
+    submission_df = convert_to_submission(all_pred, SAMPLE_SUB_PATH)
+    submission_df.to_csv(SUBMISSION_OUT, index=False, encoding="utf-8-sig")
 
 if __name__ == "__main__":
     main()
