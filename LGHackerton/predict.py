@@ -10,6 +10,7 @@ from LGHackerton.preprocess import Preprocessor, L, H
 from LGHackerton.models.lgbm_trainer import LGBMTrainer, LGBMParams
 from LGHackerton.models.patchtst_trainer import PatchTSTTrainer, PatchTSTParams, TORCH_OK
 from LGHackerton.utils.ensemble_manager import EnsembleManager
+from LGHackerton.utils.device import select_device
 from LGHackerton.config.default import (
     TEST_GLOB,
     ARTIFACTS_PATH,
@@ -43,18 +44,20 @@ def convert_to_submission(pred_df: pd.DataFrame, sample_path: str) -> pd.DataFra
     return out_df
 
 def main():
+    device = select_device()
+
     pp = Preprocessor(); pp.load(ARTIFACTS_PATH)
 
     from LGHackerton.models.base_trainer import TrainConfig
     cfg = TrainConfig(**TRAIN_CFG)
     set_seed(cfg.seed)
 
-    lgb = LGBMTrainer(params=LGBMParams(**LGBM_PARAMS), features=pp.feature_cols, model_dir=cfg.model_dir)
+    lgb = LGBMTrainer(params=LGBMParams(**LGBM_PARAMS), features=pp.feature_cols, model_dir=cfg.model_dir, device=device)
     lgb.load(os.path.join(cfg.model_dir, "lgbm_models.json"))
 
     pt = None
     if TORCH_OK and os.path.exists(os.path.join(cfg.model_dir, "patchtst.pt")):
-        pt = PatchTSTTrainer(params=PatchTSTParams(**PATCH_PARAMS), L=L, H=H, model_dir=cfg.model_dir)
+        pt = PatchTSTTrainer(params=PatchTSTParams(**PATCH_PARAMS), L=L, H=H, model_dir=cfg.model_dir, device=device)
         pt.load(os.path.join(cfg.model_dir, "patchtst.pt"))
 
     ens = EnsembleManager()

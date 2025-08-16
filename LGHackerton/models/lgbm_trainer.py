@@ -28,10 +28,11 @@ class LGBMParams:
     early_stopping_rounds: int = 200
 
 class LGBMTrainer(BaseModel):
-    def __init__(self, params: LGBMParams, features: List[str], model_dir: str):
+    def __init__(self, params: LGBMParams, features: List[str], model_dir: str, device: str):
         super().__init__(model_params=asdict(params), model_dir=model_dir)
         self.params = params
         self.features = features
+        self.device = device  # 'cpu', 'cuda', or 'mps'
         # for each horizon keep separate lists for regressor and classifier boosters
         self.models: Dict[int, Dict[str, List[lgb.Booster]]] = {
             h: {"reg": [], "clf": []} for h in range(1, 8)
@@ -113,6 +114,7 @@ class LGBMTrainer(BaseModel):
                         reg_alpha=self.params.reg_alpha,
                         reg_lambda=self.params.reg_lambda,
                         metric="binary_logloss",
+                        device_type="gpu" if self.device == "cuda" else "cpu",
                     )
                     callbacks = []
                     if self.params.early_stopping_rounds and self.params.early_stopping_rounds > 0:
@@ -150,6 +152,7 @@ class LGBMTrainer(BaseModel):
                         reg_alpha=self.params.reg_alpha,
                         reg_lambda=self.params.reg_lambda,
                         metric=None,
+                        device_type="gpu" if self.device == "cuda" else "cpu",
                     )
                     if obj == "tweedie":
                         reg_params["tweedie_variance_power"] = self.params.tweedie_variance_power
@@ -199,6 +202,7 @@ class LGBMTrainer(BaseModel):
                         reg_alpha=self.params.reg_alpha,
                         reg_lambda=self.params.reg_lambda,
                         metric=None,
+                        device_type="gpu" if self.device == "cuda" else "cpu",
                     )
                     if obj == "tweedie":
                         lgb_params["tweedie_variance_power"] = self.params.tweedie_variance_power
