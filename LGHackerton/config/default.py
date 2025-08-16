@@ -26,6 +26,8 @@ SUBMISSION_OUT  = str((ARTIFACTS_DIR / "submission.csv").resolve())
 PATCH_EVAL_OUT  = str((ARTIFACTS_DIR / "patch_eval").resolve())
 # PatchTST 예측 결과 저장 경로
 PATCH_PRED_OUT  = str((ARTIFACTS_DIR / "eval_patch.csv").resolve())
+OOF_LGBM_OUT  = str((ARTIFACTS_DIR / "oof_lgbm.csv").resolve())
+OOF_PATCH_OUT = str((ARTIFACTS_DIR / "oof_patch.csv").resolve())
 
 # 하이퍼파라미터(필요 시 그대로 유지)
 LGBM_PARAMS = dict(

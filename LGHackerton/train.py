@@ -15,6 +15,8 @@ from LGHackerton.config.default import (
     TRAIN_CFG,
     ARTIFACTS_DIR,
     ENSEMBLE_CFG,
+    OOF_LGBM_OUT,
+    OOF_PATCH_OUT,
 )
 from LGHackerton.utils.seed import set_seed
 
@@ -39,13 +41,13 @@ def main():
     set_seed(cfg.seed)
     lgb_tr = LGBMTrainer(params=lgb_params, features=pp.feature_cols, model_dir=cfg.model_dir)
     lgb_tr.train(lgbm_train, cfg)
-    lgb_tr.get_oof().to_csv(ARTIFACTS_DIR / "oof_lgbm.csv", index=False)
+    lgb_tr.get_oof().to_csv(OOF_LGBM_OUT, index=False)
 
     if TORCH_OK:
         patch_params = PatchTSTParams(**PATCH_PARAMS)
         pt_tr = PatchTSTTrainer(params=patch_params, L=L, H=H, model_dir=cfg.model_dir)
         pt_tr.train(X_train, y_train, series_ids, label_dates, cfg)
-        pt_tr.get_oof().to_csv(ARTIFACTS_DIR / "oof_patch.csv", index=False)
+        pt_tr.get_oof().to_csv(OOF_PATCH_OUT, index=False)
 
 if __name__ == "__main__":
     main()
