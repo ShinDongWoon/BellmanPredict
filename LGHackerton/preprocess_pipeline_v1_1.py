@@ -21,6 +21,12 @@ from typing import Dict, Tuple, Optional, List, Iterable
 import numpy as np
 import pandas as pd
 
+try:
+    from tqdm.auto import tqdm
+except Exception:  # pragma: no cover - tqdm optional
+    def tqdm(x, *args, **kwargs):  # type: ignore
+        return x
+
 # ------------------------------
 # Constants
 # ------------------------------
@@ -470,9 +476,9 @@ class SampleWindowizer:
         # Need at least lag_28 available to respect 28-day features
         if "lag_27" not in d.columns:
             raise ValueError("Strict features required before building LGBM train set.")
-        parts = []
+        rows = []
         gb = d.groupby(SERIES_COL, sort=False)
-        for sid, g in gb:
+        for sid, g in tqdm(gb, total=d[SERIES_COL].nunique(), desc="lgbm-train"):
             g = g.reset_index(drop=True)
             # candidate t where we have full lookback features
             valid_mask = g["lag_27"].notna()
@@ -486,17 +492,17 @@ class SampleWindowizer:
                     if pd.isna(y):
                         # training target must exist
                         continue
-                    row_feat = g.loc[t, feature_cols]
-                    row_base = {
+                    row = {
                         SERIES_COL: sid,
                         DATE_COL: g.loc[t, DATE_COL],
                         "h": h,
                         "y": float(y),
                     }
-                    parts.append(pd.concat([pd.Series(row_base), row_feat]))
-        if not parts:
+                    row.update(g.loc[t, feature_cols].to_dict())
+                    rows.append(row)
+        if not rows:
             raise RuntimeError("No training rows produced. Check input coverage.")
-        out = pd.DataFrame(parts)
+        out = pd.DataFrame(rows)
         vprint(f"[LGBM/TRAIN] rows={len(out)}  feats={len(feature_cols)}")
 
         return out.reset_index(drop=True)
