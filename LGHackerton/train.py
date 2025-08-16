@@ -1,5 +1,6 @@
 
 from __future__ import annotations
+import argparse
 import os
 import pandas as pd
 
@@ -18,8 +19,10 @@ from LGHackerton.config.default import (
     ENSEMBLE_CFG,
     OOF_LGBM_OUT,
     OOF_PATCH_OUT,
+    SHOW_PROGRESS,
 )
 from LGHackerton.utils.seed import set_seed
+
 
 def _read_table(path: str) -> pd.DataFrame:
     if path.lower().endswith(".csv"):
@@ -28,11 +31,20 @@ def _read_table(path: str) -> pd.DataFrame:
         return pd.read_excel(path)
     raise ValueError("Unsupported file type. Use .csv or .xlsx")
 
-def main():
+
+def main(show_progress: bool | None = None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--progress", dest="show_progress", action="store_true", help="show preprocessing progress")
+    parser.add_argument("--no-progress", dest="show_progress", action="store_false", help="hide preprocessing progress")
+    parser.set_defaults(show_progress=SHOW_PROGRESS)
+    if show_progress is None:
+        args = parser.parse_args()
+        show_progress = args.show_progress
+
     device = select_device()  # ask user for compute environment
 
     df_train_raw = _read_table(TRAIN_PATH)
-    pp = Preprocessor()
+    pp = Preprocessor(show_progress=show_progress)
     df_full = pp.fit_transform_train(df_train_raw)
     pp.save(ARTIFACTS_PATH)
 
