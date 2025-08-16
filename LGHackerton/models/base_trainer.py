@@ -12,6 +12,7 @@ class TrainConfig:
     priority_weight:float=3.0
     use_weighted_loss:bool=False
     use_asinh_target:bool=False
+    use_hurdle:bool=False
     model_dir:str="./artifacts"
     # validation control
     val_policy:str="ratio"          # "ratio", "span", "rocv"

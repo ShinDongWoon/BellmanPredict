@@ -32,8 +32,12 @@ class LGBMTrainer(BaseModel):
         super().__init__(model_params=asdict(params), model_dir=model_dir)
         self.params = params
         self.features = features
-        self.models: Dict[int, List[lgb.Booster]] = {h: [] for h in range(1, 8)}
+        # for each horizon keep separate lists for regressor and classifier boosters
+        self.models: Dict[int, Dict[str, List[lgb.Booster]]] = {
+            h: {"reg": [], "clf": []} for h in range(1, 8)
+        }
         self.use_asinh_target = False
+        self.use_hurdle = False
 
     @staticmethod
     def _compute_label_date(df: pd.DataFrame, date_col: str, h_col: str) -> pd.Series:
@@ -59,6 +63,7 @@ class LGBMTrainer(BaseModel):
 
     def train(self, df_train: pd.DataFrame, cfg: TrainConfig) -> None:
         self.use_asinh_target = cfg.use_asinh_target
+        self.use_hurdle = getattr(cfg, "use_hurdle", False)
         os.makedirs(self.model_dir, exist_ok=True)
 
         df = df_train.copy()
@@ -71,6 +76,8 @@ class LGBMTrainer(BaseModel):
             feat_cols = [c for c in self.features if c in dfh.columns]
             X = dfh[feat_cols].fillna(0).astype("float32").values
             y = dfh["y"].astype("float32").values
+            # classification label
+            z = (y > 0).astype("float32")
             if cfg.use_asinh_target:
                 if self.params.objective != "mae":
                     self.params.objective = "mae"
@@ -81,55 +88,125 @@ class LGBMTrainer(BaseModel):
             w = np.where(np.isin(shops, list(PRIORITY_OUTLETS)), cfg.priority_weight, 1.0).astype("float32")
 
             folds = self._make_cv_slices(dfh, cfg, "label_date")
-            self.models[h] = []
+            self.models[h] = {"reg": [], "clf": []}
             for i, (tr_mask, va_mask) in enumerate(folds):
                 X_tr, y_tr_f = X[tr_mask], y_tr[tr_mask]
                 X_va, y_va_f = X[va_mask], y_tr[va_mask]
+                z_tr, z_va = z[tr_mask], z[va_mask]
                 w_tr, w_va = w[tr_mask], w[va_mask]
 
-                dtrain = lgb.Dataset(X_tr, label=y_tr_f, weight=w_tr, free_raw_data=False)
-                dvalid = lgb.Dataset(X_va, label=y_va_f, weight=w_va, reference=dtrain, free_raw_data=False)
+                if self.use_hurdle:
+                    # classifier
+                    dtrain_clf = lgb.Dataset(X_tr, label=z_tr, weight=w_tr, free_raw_data=False)
+                    dvalid_clf = lgb.Dataset(X_va, label=z_va, weight=w_va, reference=dtrain_clf, free_raw_data=False)
+                    clf_params = dict(
+                        objective="binary",
+                        learning_rate=self.params.learning_rate,
+                        num_leaves=self.params.num_leaves,
+                        max_depth=self.params.max_depth,
+                        min_data_in_leaf=self.params.min_data_in_leaf,
+                        subsample=self.params.subsample,
+                        colsample_bytree=self.params.colsample_bytree,
+                        reg_alpha=self.params.reg_alpha,
+                        reg_lambda=self.params.reg_lambda,
+                        metric="binary_logloss",
+                    )
+                    callbacks = []
+                    if self.params.early_stopping_rounds and self.params.early_stopping_rounds > 0:
+                        callbacks.append(
+                            lgb.early_stopping(stopping_rounds=self.params.early_stopping_rounds, verbose=False))
+                    clf_booster = lgb.train(
+                        params=clf_params,
+                        train_set=dtrain_clf,
+                        num_boost_round=self.params.n_estimators,
+                        valid_sets=[dvalid_clf],
+                        callbacks=callbacks,
+                    )
+                    self.models[h]["clf"].append(clf_booster)
 
-                obj = self.params.objective
-                if cfg.use_asinh_target:
-                    obj = "regression_l1"  # 'mae' 아님
+                    # regressor on positive samples only
+                    pos_tr = z_tr > 0
+                    pos_va = z_va > 0
+                    if pos_tr.sum() == 0 or pos_va.sum() == 0:
+                        continue
+                    dtrain_reg = lgb.Dataset(X_tr[pos_tr], label=y_tr_f[pos_tr], weight=w_tr[pos_tr], free_raw_data=False)
+                    dvalid_reg = lgb.Dataset(X_va[pos_va], label=y_va_f[pos_va], weight=w_va[pos_va], reference=dtrain_reg, free_raw_data=False)
 
-                lgb_params = dict(
-                    objective=obj,
-                    learning_rate=self.params.learning_rate,
-                    num_leaves=self.params.num_leaves,
-                    max_depth=self.params.max_depth,
-                    min_data_in_leaf=self.params.min_data_in_leaf,
-                    subsample=self.params.subsample,
-                    colsample_bytree=self.params.colsample_bytree,
-                    reg_alpha=self.params.reg_alpha,
-                    reg_lambda=self.params.reg_lambda,
-                    metric=None,
-                )
-                if obj == "tweedie":
-                    lgb_params["tweedie_variance_power"] = self.params.tweedie_variance_power
+                    obj = self.params.objective
+                    if cfg.use_asinh_target:
+                        obj = "regression_l1"  # 'mae' 아님
 
-                callbacks = []
-                if self.params.early_stopping_rounds and self.params.early_stopping_rounds > 0:
-                    callbacks.append(
-                        lgb.early_stopping(stopping_rounds=self.params.early_stopping_rounds, verbose=False))
-                # 로그 끄기(원하면 주석 해제)
-                # callbacks.append(lgb.log_evaluation(period=0))
+                    reg_params = dict(
+                        objective=obj,
+                        learning_rate=self.params.learning_rate,
+                        num_leaves=self.params.num_leaves,
+                        max_depth=self.params.max_depth,
+                        min_data_in_leaf=self.params.min_data_in_leaf,
+                        subsample=self.params.subsample,
+                        colsample_bytree=self.params.colsample_bytree,
+                        reg_alpha=self.params.reg_alpha,
+                        reg_lambda=self.params.reg_lambda,
+                        metric=None,
+                    )
+                    if obj == "tweedie":
+                        reg_params["tweedie_variance_power"] = self.params.tweedie_variance_power
 
-                booster = lgb.train(
-                    params=lgb_params,
-                    train_set=dtrain,
-                    num_boost_round=self.params.n_estimators,
-                    valid_sets=[dvalid],
-                    feval=lambda preds, ds: lgbm_weighted_smape(preds, ds, use_asinh_target=cfg.use_asinh_target),
-                    callbacks=callbacks,
-                )
-                self.models[h].append(booster)
+                    callbacks_reg = []
+                    if self.params.early_stopping_rounds and self.params.early_stopping_rounds > 0:
+                        callbacks_reg.append(
+                            lgb.early_stopping(stopping_rounds=self.params.early_stopping_rounds, verbose=False))
+
+                    reg_booster = lgb.train(
+                        params=reg_params,
+                        train_set=dtrain_reg,
+                        num_boost_round=self.params.n_estimators,
+                        valid_sets=[dvalid_reg],
+                        feval=lambda preds, ds: lgbm_weighted_smape(preds, ds, use_asinh_target=cfg.use_asinh_target),
+                        callbacks=callbacks_reg,
+                    )
+                    self.models[h]["reg"].append(reg_booster)
+                else:
+                    dtrain = lgb.Dataset(X_tr, label=y_tr_f, weight=w_tr, free_raw_data=False)
+                    dvalid = lgb.Dataset(X_va, label=y_va_f, weight=w_va, reference=dtrain, free_raw_data=False)
+
+                    obj = self.params.objective
+                    if cfg.use_asinh_target:
+                        obj = "regression_l1"  # 'mae' 아님
+
+                    lgb_params = dict(
+                        objective=obj,
+                        learning_rate=self.params.learning_rate,
+                        num_leaves=self.params.num_leaves,
+                        max_depth=self.params.max_depth,
+                        min_data_in_leaf=self.params.min_data_in_leaf,
+                        subsample=self.params.subsample,
+                        colsample_bytree=self.params.colsample_bytree,
+                        reg_alpha=self.params.reg_alpha,
+                        reg_lambda=self.params.reg_lambda,
+                        metric=None,
+                    )
+                    if obj == "tweedie":
+                        lgb_params["tweedie_variance_power"] = self.params.tweedie_variance_power
+
+                    callbacks = []
+                    if self.params.early_stopping_rounds and self.params.early_stopping_rounds > 0:
+                        callbacks.append(
+                            lgb.early_stopping(stopping_rounds=self.params.early_stopping_rounds, verbose=False))
+
+                    booster = lgb.train(
+                        params=lgb_params,
+                        train_set=dtrain,
+                        num_boost_round=self.params.n_estimators,
+                        valid_sets=[dvalid],
+                        feval=lambda preds, ds: lgbm_weighted_smape(preds, ds, use_asinh_target=cfg.use_asinh_target),
+                        callbacks=callbacks,
+                    )
+                    self.models[h]["reg"].append(booster)
 
         self.save(os.path.join(self.model_dir, "lgbm_models.json"))
 
     def predict(self, df_eval: pd.DataFrame) -> pd.DataFrame:
-        if not any(self.models.values()):
+        if not any(v["reg"] or v["clf"] for v in self.models.values()):
             raise RuntimeError("Models not trained/loaded.")
         dfe = df_eval.copy()
         feat_cols = [c for c in self.features if c in dfe.columns]
@@ -141,17 +218,29 @@ class LGBMTrainer(BaseModel):
             if not mask.any():
                 continue
             Xh = feats[mask]
-            yh_list = []
-            for booster in self.models.get(h, []):
+            reg_list = []
+            for booster in self.models.get(h, {}).get("reg", []):
                 yhat = booster.predict(Xh, num_iteration=booster.best_iteration)
-                yh_list.append(yhat)
-            if not yh_list:
+                reg_list.append(yhat)
+            if not reg_list:
                 continue
-            yhat_mean = np.mean(np.stack(yh_list, axis=0), axis=0)
+            reg_mean = np.mean(np.stack(reg_list, axis=0), axis=0)
             if self.use_asinh_target:
-                yhat_mean = np.sinh(yhat_mean)
-            yhat_mean = np.clip(yhat_mean, 0.0, None)
-            preds[mask] = yhat_mean
+                reg_mean = np.sinh(reg_mean)
+            reg_mean = np.clip(reg_mean, 0.0, None)
+
+            if self.use_hurdle:
+                clf_list = []
+                for booster in self.models.get(h, {}).get("clf", []):
+                    ph = booster.predict(Xh, num_iteration=booster.best_iteration)
+                    clf_list.append(ph)
+                if clf_list:
+                    prob_mean = np.mean(np.stack(clf_list, axis=0), axis=0)
+                else:
+                    prob_mean = 1.0
+                preds[mask] = np.clip(prob_mean * reg_mean, 0.0, None)
+            else:
+                preds[mask] = reg_mean
 
         out = dfe[["series_id", "h"]].copy()
         out["yhat_lgbm"] = preds
@@ -160,13 +249,23 @@ class LGBMTrainer(BaseModel):
     def save(self, path: str) -> None:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         index = {}
-        for h, boosters in self.models.items():
-            index[str(h)] = []
-            for i, booster in enumerate(boosters):
-                fpath = os.path.join(self.model_dir, f"lgbm_h{h}_fold{i}.txt")
+        for h, comps in self.models.items():
+            index[str(h)] = {"reg": [], "clf": []}
+            for i, booster in enumerate(comps.get("reg", [])):
+                fpath = os.path.join(self.model_dir, f"lgbm_reg_h{h}_fold{i}.txt")
                 booster.save_model(fpath, num_iteration=booster.best_iteration)
-                index[str(h)].append(os.path.basename(fpath))
-        meta = {"params": self.model_params, "use_asinh_target": self.use_asinh_target, "index": index, "features": self.features}
+                index[str(h)]["reg"].append(os.path.basename(fpath))
+            for i, booster in enumerate(comps.get("clf", [])):
+                fpath = os.path.join(self.model_dir, f"lgbm_clf_h{h}_fold{i}.txt")
+                booster.save_model(fpath, num_iteration=booster.best_iteration)
+                index[str(h)]["clf"].append(os.path.basename(fpath))
+        meta = {
+            "params": self.model_params,
+            "use_asinh_target": self.use_asinh_target,
+            "use_hurdle": self.use_hurdle,
+            "index": index,
+            "features": self.features,
+        }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
 
@@ -175,12 +274,15 @@ class LGBMTrainer(BaseModel):
             meta = json.load(f)
         self.model_params = meta["params"]
         self.use_asinh_target = bool(meta.get("use_asinh_target", False))
+        self.use_hurdle = bool(meta.get("use_hurdle", False))
         self.features = list(meta.get("features", []))
         index = meta["index"]
-        self.models = {h: [] for h in range(1,8)}
-        for h_str, files in index.items():
+        self.models = {h: {"reg": [], "clf": []} for h in range(1,8)}
+        for h_str, comp in index.items():
             h = int(h_str)
-            boosters = []
-            for fname in files:
-                boosters.append(lgb.Booster(model_file=os.path.join(self.model_dir, fname)))
-            self.models[h] = boosters
+            reg_files = comp.get("reg", [])
+            clf_files = comp.get("clf", [])
+            for fname in reg_files:
+                self.models[h]["reg"].append(lgb.Booster(model_file=os.path.join(self.model_dir, fname)))
+            for fname in clf_files:
+                self.models[h]["clf"].append(lgb.Booster(model_file=os.path.join(self.model_dir, fname)))

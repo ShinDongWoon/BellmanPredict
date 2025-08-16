@@ -43,6 +43,7 @@ TRAIN_CFG = dict(
     priority_weight=3.0,
     use_weighted_loss=False,
     use_asinh_target=False,
+    use_hurdle=False,
     model_dir=MODEL_DIR,
     val_policy="ratio",
     val_ratio=0.2,
