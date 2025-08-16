@@ -11,6 +11,7 @@ TRAIN_PATH = str((DATA_DIR / "train.csv").resolve())
 TEST_DIR = DATA_DIR
 TEST_GLOB = str((TEST_DIR / "TEST_*.csv").resolve())
 # EVAL_PATH  = str((DATA_DIR / "TEST_00.csv").resolve())
+SAMPLE_SUB_PATH = str((DATA_DIR / "sample_submission.csv").resolve())
 
 # 산출물 저장 루트(자동 생성)
 ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
@@ -20,6 +21,7 @@ ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 MODEL_DIR       = str((ARTIFACTS_DIR / "models").resolve())
 ARTIFACTS_PATH  = str((ARTIFACTS_DIR / "preprocess_artifacts.pkl").resolve())
 LGBM_EVAL_OUT   = str((ARTIFACTS_DIR / "eval_lgbm.csv").resolve())
+SUBMISSION_OUT  = str((ARTIFACTS_DIR / "submission.csv").resolve())
 # PatchTST는 prefix를 요구하므로 확장자 없이 파일명만 제공
 PATCH_EVAL_OUT  = str((ARTIFACTS_DIR / "patch_eval").resolve())
 # PatchTST 예측 결과 저장 경로
