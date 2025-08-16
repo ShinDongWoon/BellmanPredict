@@ -1,4 +1,4 @@
-from .preprocess_pipeline_v1_1 import (
+from LGHackerton.preprocess.preprocess_pipeline_v1_1 import (
     Preprocessor,
     DATE_COL,
     SERIES_COL,

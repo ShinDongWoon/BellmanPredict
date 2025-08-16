@@ -7,11 +7,11 @@ import re
 import numpy as np
 import pandas as pd
 
-from .preprocess import Preprocessor, L, H
-from .models.lgbm_trainer import LGBMTrainer, LGBMParams
-from .models.patchtst_trainer import PatchTSTTrainer, PatchTSTParams, TORCH_OK
-from .utils.ensemble_manager import EnsembleManager
-from .config.default import (
+from LGHackerton.preprocess import Preprocessor, L, H
+from LGHackerton.models.lgbm_trainer import LGBMTrainer, LGBMParams
+from LGHackerton.models.patchtst_trainer import PatchTSTTrainer, PatchTSTParams, TORCH_OK
+from LGHackerton.utils.ensemble_manager import EnsembleManager
+from LGHackerton.config.default import (
     TEST_GLOB,
     ARTIFACTS_PATH,
     LGBM_EVAL_OUT,
@@ -59,7 +59,7 @@ def convert_to_submission(pred_df: pd.DataFrame, sample_path: str) -> pd.DataFra
 def main():
     pp = Preprocessor(); pp.load(ARTIFACTS_PATH)
 
-    from .models.base_trainer import TrainConfig
+    from LGHackerton.models.base_trainer import TrainConfig
     cfg = TrainConfig(**TRAIN_CFG)
     set_seed(cfg.seed)
 
