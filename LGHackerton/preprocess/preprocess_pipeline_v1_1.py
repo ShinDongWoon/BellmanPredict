@@ -20,6 +20,10 @@ from typing import Dict, Tuple, Optional, List, Iterable
 
 import numpy as np
 import pandas as pd
+try:
+    from ..utils.progress import get_progress_bar
+except ImportError:  # pragma: no cover - fallback when executed as script
+    from utils.progress import get_progress_bar
 
 # ------------------------------
 # Constants
@@ -605,7 +609,7 @@ class Preprocessor:
     High-level API to fit on train and transform eval with strict leakage control.
     """
 
-    def __init__(self):
+    def __init__(self, show_progress: bool = False):
         self.guard = LeakGuard()
         self.schema = SchemaNormalizer()
         self.cont_fix = DateContinuityFixer()
@@ -616,6 +620,7 @@ class Preprocessor:
         self.encoder = Encoder()
         self.windowizer = SampleWindowizer()
         self.feature_cols: List[str] = []
+        self.show_progress = show_progress
 
     # --------------------------
     # Train
@@ -623,36 +628,63 @@ class Preprocessor:
     def fit_transform_train(self, df_raw: pd.DataFrame) -> pd.DataFrame:
         self.guard.set_scope("train")
 
-        # Schema normalize
-        df = self.schema.fit(df_raw).transform(df_raw, allow_new=True)
-        vprint(f"[FIT] schema: rows={len(df)}  series={df[SERIES_COL].nunique()}")
+        def _schema(df: pd.DataFrame) -> pd.DataFrame:
+            df = self.schema.fit(df).transform(df, allow_new=True)
+            vprint(f"[FIT] schema: rows={len(df)}  series={df[SERIES_COL].nunique()}")
+            return df
 
-        # Daily continuity
-        df = self.cont_fix.transform(df)
-        vprint(f"[FIT] continuity: rows={len(df)}")
-        # Calendar
-        self.calendar.fit(df)
-        df = self.calendar.transform(df)
-        vprint(f"[FIT] calendar added: cols={len(df.columns)}")
-        # Missing + Outlier
-        self.missing_outlier.fit(df)
-        df = self.missing_outlier.transform(df)
-        vprint(f"[FIT] outlier/na: nonnull_sales={df[SALES_COL].notna().sum()}")
+        def _continuity(df: pd.DataFrame) -> pd.DataFrame:
+            df = self.cont_fix.transform(df)
+            vprint(f"[FIT] continuity: rows={len(df)}")
+            return df
 
-        # Strict features
-        df = self.strict_feats.transform(df)
-        vprint(f"[FIT] strict feats: cols={len(df.columns)}")
-        # Rich lookup from TRAIN only
-        self.rich.fit(df)
-        df = self.rich.transform(df)
+        def _calendar(df: pd.DataFrame) -> pd.DataFrame:
+            self.calendar.fit(df)
+            df = self.calendar.transform(df)
+            vprint(f"[FIT] calendar added: cols={len(df.columns)}")
+            return df
 
-        # Encoder
-        self.encoder.fit(df)
-        df = self.encoder.transform(df)
+        def _missing_outlier(df: pd.DataFrame) -> pd.DataFrame:
+            self.missing_outlier.fit(df)
+            df = self.missing_outlier.transform(df)
+            vprint(f"[FIT] outlier/na: nonnull_sales={df[SALES_COL].notna().sum()}")
+            return df
 
-        # Feature columns for LGBM
-        self.feature_cols = self._select_feature_columns(df)
-        vprint(f"[FIT] rich+encode: feature_cols={len(self.feature_cols)}  total_cols={len(df.columns)}")
+        def _strict_feats(df: pd.DataFrame) -> pd.DataFrame:
+            df = self.strict_feats.transform(df)
+            vprint(f"[FIT] strict feats: cols={len(df.columns)}")
+            return df
+
+        def _rich_lookup(df: pd.DataFrame) -> pd.DataFrame:
+            self.rich.fit(df)
+            return self.rich.transform(df)
+
+        def _encode(df: pd.DataFrame) -> pd.DataFrame:
+            self.encoder.fit(df)
+            return self.encoder.transform(df)
+
+        def _feature_cols(df: pd.DataFrame) -> pd.DataFrame:
+            self.feature_cols = self._select_feature_columns(df)
+            vprint(f"[FIT] rich+encode: feature_cols={len(self.feature_cols)}  total_cols={len(df.columns)}")
+            return df
+
+        steps = [
+            ("schema", _schema),
+            ("continuity", _continuity),
+            ("calendar", _calendar),
+            ("missing_outlier", _missing_outlier),
+            ("strict_feats", _strict_feats),
+            ("rich_lookup", _rich_lookup),
+            ("encoder", _encode),
+            ("feature_cols", _feature_cols),
+        ]
+
+        df = df_raw
+        with get_progress_bar(total=len(steps), disable=not self.show_progress) as pbar:
+            for name, func in steps:
+                df = func(df)
+                pbar.set_description(name)
+                pbar.update(1)
         return df
 
     # --------------------------
@@ -661,14 +693,23 @@ class Preprocessor:
     def transform_eval(self, df_eval_raw: pd.DataFrame) -> pd.DataFrame:
         self.guard.set_scope("eval")
 
-        # Transform-only path. No fitting.
-        df = self.schema.transform(df_eval_raw, allow_new=False)
-        df = self.cont_fix.transform(df)
-        df = self.calendar.transform(df)
-        df = self.missing_outlier.transform(df)
-        df = self.strict_feats.transform(df)
-        df = self.rich.transform(df)
-        df = self.encoder.transform(df)
+        steps = [
+            ("schema", lambda df: self.schema.transform(df, allow_new=False)),
+            ("continuity", self.cont_fix.transform),
+            ("calendar", self.calendar.transform),
+            ("missing_outlier", self.missing_outlier.transform),
+            ("strict_feats", self.strict_feats.transform),
+            ("rich_lookup", self.rich.transform),
+            ("encoder", self.encoder.transform),
+        ]
+
+        df = df_eval_raw
+        with get_progress_bar(total=len(steps), disable=not self.show_progress) as pbar:
+            for name, func in steps:
+                df = func(df)
+                pbar.set_description(name)
+                pbar.update(1)
+
         # no feature_cols change
         vprint(f"[EVAL] transformed: rows={len(df)}  series={df[SERIES_COL].nunique()}  cols={len(df.columns)}")
 
