@@ -4,7 +4,7 @@ import os, json
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, asdict
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
 
 import lightgbm as lgb
 from models.base_trainer import BaseModel, TrainConfig
@@ -38,6 +38,7 @@ class LGBMTrainer(BaseModel):
         }
         self.use_asinh_target = False
         self.use_hurdle = False
+        self.oof_records: List[Dict[str, Any]] = []
 
     @staticmethod
     def _compute_label_date(df: pd.DataFrame, date_col: str, h_col: str) -> pd.Series:
@@ -68,6 +69,7 @@ class LGBMTrainer(BaseModel):
 
         df = df_train.copy()
         df["label_date"] = self._compute_label_date(df, "date", "h")
+        self.oof_records = []
 
         for h in range(1, 8):
             dfh = df[df["h"] == h].reset_index(drop=True)
@@ -92,6 +94,7 @@ class LGBMTrainer(BaseModel):
             for i, (tr_mask, va_mask) in enumerate(folds):
                 X_tr, y_tr_f = X[tr_mask], y_tr[tr_mask]
                 X_va, y_va_f = X[va_mask], y_tr[va_mask]
+                y_va = y[va_mask]
                 z_tr, z_va = z[tr_mask], z[va_mask]
                 w_tr, w_va = w[tr_mask], w[va_mask]
 
@@ -165,6 +168,18 @@ class LGBMTrainer(BaseModel):
                         callbacks=callbacks_reg,
                     )
                     self.models[h]["reg"].append(reg_booster)
+
+                    # OOF prediction for this fold
+                    prob = clf_booster.predict(X_va, num_iteration=clf_booster.best_iteration)
+                    reg_pred = reg_booster.predict(X_va, num_iteration=reg_booster.best_iteration)
+                    if cfg.use_asinh_target:
+                        reg_pred = np.sinh(reg_pred)
+                    reg_pred = np.clip(reg_pred, 0.0, None)
+                    yhat = np.clip(prob * reg_pred, 0.0, None)
+                    oof_df = dfh.loc[va_mask, ["series_id", "h"]].copy()
+                    oof_df["y"] = y_va
+                    oof_df["yhat"] = yhat
+                    self.oof_records.extend(oof_df.to_dict("records"))
                 else:
                     dtrain = lgb.Dataset(X_tr, label=y_tr_f, weight=w_tr, free_raw_data=False)
                     dvalid = lgb.Dataset(X_va, label=y_va_f, weight=w_va, reference=dtrain, free_raw_data=False)
@@ -202,6 +217,16 @@ class LGBMTrainer(BaseModel):
                         callbacks=callbacks,
                     )
                     self.models[h]["reg"].append(booster)
+
+                    # OOF prediction for this fold
+                    yhat = booster.predict(X_va, num_iteration=booster.best_iteration)
+                    if cfg.use_asinh_target:
+                        yhat = np.sinh(yhat)
+                    yhat = np.clip(yhat, 0.0, None)
+                    oof_df = dfh.loc[va_mask, ["series_id", "h"]].copy()
+                    oof_df["y"] = y_va
+                    oof_df["yhat"] = yhat
+                    self.oof_records.extend(oof_df.to_dict("records"))
 
         self.save(os.path.join(self.model_dir, "lgbm_models.json"))
 
@@ -245,6 +270,9 @@ class LGBMTrainer(BaseModel):
         out = dfe[["series_id", "h"]].copy()
         out["yhat_lgbm"] = preds
         return out
+
+    def get_oof(self) -> pd.DataFrame:
+        return pd.DataFrame(self.oof_records)
 
     def save(self, path: str) -> None:
         os.makedirs(os.path.dirname(path), exist_ok=True)

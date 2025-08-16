@@ -11,7 +11,14 @@ except Exception as e:
 from models.base_trainer import TrainConfig
 from models.lgbm_trainer import LGBMParams, LGBMTrainer
 from models.patchtst_trainer import PatchTSTParams, PatchTSTTrainer, TORCH_OK
-from config.default import (TRAIN_PATH, ARTIFACTS_PATH, LGBM_PARAMS, PATCH_PARAMS, TRAIN_CFG)
+from config.default import (
+    TRAIN_PATH,
+    ARTIFACTS_PATH,
+    LGBM_PARAMS,
+    PATCH_PARAMS,
+    TRAIN_CFG,
+    ARTIFACTS_DIR,
+)
 
 def _read_table(path: str) -> pd.DataFrame:
     if path.lower().endswith(".csv"):
@@ -33,11 +40,13 @@ def main():
     cfg = TrainConfig(**TRAIN_CFG)
     lgb_tr = LGBMTrainer(params=lgb_params, features=pp.feature_cols, model_dir=cfg.model_dir)
     lgb_tr.train(lgbm_train, cfg)
+    lgb_tr.get_oof().to_csv(ARTIFACTS_DIR / "oof_lgbm.csv", index=False)
 
     if TORCH_OK:
         patch_params = PatchTSTParams(**PATCH_PARAMS)
         pt_tr = PatchTSTTrainer(params=patch_params, L=L, H=H, model_dir=cfg.model_dir)
         pt_tr.train(X_train, y_train, series_ids, label_dates, cfg)
+        pt_tr.get_oof().to_csv(ARTIFACTS_DIR / "oof_patch.csv", index=False)
 
 if __name__ == "__main__":
     main()
