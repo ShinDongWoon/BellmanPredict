@@ -5,11 +5,11 @@ import random
 import numpy as np
 import pandas as pd
 
-from .preprocess import Preprocessor, DATE_COL, SERIES_COL, SALES_COL, L, H
-from .models.base_trainer import TrainConfig
-from .models.lgbm_trainer import LGBMParams, LGBMTrainer
-from .models.patchtst_trainer import PatchTSTParams, PatchTSTTrainer, TORCH_OK
-from .config.default import (
+from LGHackerton.preprocess import Preprocessor, DATE_COL, SERIES_COL, SALES_COL, L, H
+from LGHackerton.models.base_trainer import TrainConfig
+from LGHackerton.models.lgbm_trainer import LGBMParams, LGBMTrainer
+from LGHackerton.models.patchtst_trainer import PatchTSTParams, PatchTSTTrainer, TORCH_OK
+from LGHackerton.config.default import (
     TRAIN_PATH,
     ARTIFACTS_PATH,
     LGBM_PARAMS,
