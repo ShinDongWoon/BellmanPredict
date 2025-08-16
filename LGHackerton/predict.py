@@ -70,17 +70,13 @@ def main():
         df_eval_full = pp.transform_eval(df_eval_raw)
 
         lgbm_eval = pp.build_lgbm_eval(df_eval_full)
-        X_eval, sids, _ = pp.build_patch_eval(df_eval_full)
-
         df_lgb = lgb.predict(lgbm_eval)
 
-        y_patch = None
-        if pt is not None:
-            sid_idx = np.array([pt.id2idx[sid] for sid in sids])
-            y_patch = pt.predict(X_eval, sid_idx)
-
         out = df_lgb.copy()
-        if y_patch is not None:
+        if pt is not None:
+            X_eval, sids, _ = pp.build_patch_eval(df_eval_full)
+            sid_idx = np.array([pt.id2idx.get(sid, 0) for sid in sids])
+            y_patch = pt.predict(X_eval, sid_idx)
             reps = np.repeat(sids, H)
             hs = np.tile(np.arange(1, H + 1), len(sids))
             dfp = pd.DataFrame({"series_id": reps, "h": hs, "yhat_patch": y_patch.reshape(-1)})
