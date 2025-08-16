@@ -44,7 +44,8 @@ def convert_to_submission(pred_df: pd.DataFrame, sample_path: str) -> pd.DataFra
     return out_df
 
 def main():
-    device = select_device()
+    # Default to environment variable ``DEVICE`` or CPU without interactive input
+    device = select_device(os.environ.get("DEVICE", "cpu"))
 
     pp = Preprocessor(); pp.load(ARTIFACTS_PATH)
 

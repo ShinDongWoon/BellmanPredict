@@ -29,7 +29,8 @@ def _read_table(path: str) -> pd.DataFrame:
     raise ValueError("Unsupported file type. Use .csv or .xlsx")
 
 def main():
-    device = select_device()  # ask user for compute environment
+    # Default to environment variable ``DEVICE`` or CPU without interactive input
+    device = select_device(os.environ.get("DEVICE", "cpu"))
 
     df_train_raw = _read_table(TRAIN_PATH)
     pp = Preprocessor()
