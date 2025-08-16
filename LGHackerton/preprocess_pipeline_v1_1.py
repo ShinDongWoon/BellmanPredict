@@ -568,9 +568,9 @@ class SampleWindowizer:
 
     def build_patch_eval(
             self, df_eval: pd.DataFrame
-    ) -> Tuple[np.ndarray, List[Tuple[str, pd.Timestamp]]]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         d = df_eval.sort_values([SERIES_COL, DATE_COL]).copy()
-        X_list, meta = [], []
+        X_list, S_list, D_list = [], [], []
         for sid, g in d.groupby(SERIES_COL, sort=False):
             g = g.reset_index(drop=True)
             if len(g) < self.L:
@@ -578,12 +578,15 @@ class SampleWindowizer:
                 continue
             x_window = g.loc[len(g) - self.L: len(g) - 1, SALES_FILLED_COL].values.astype(float)
             X_list.append(x_window.reshape(self.L, 1))
-            meta.append((sid, g.loc[len(g) - 1, DATE_COL]))
+            S_list.append(sid)
+            D_list.append(g.loc[len(g) - 1, DATE_COL])
         if not X_list:
             raise RuntimeError("No PatchTST eval windows produced.")
         vprint(f"[PATCH/EVAL] windows={len(X_list)}")
 
-        return np.stack(X_list, axis=0), meta
+        sids = np.array(S_list, dtype=object)
+        dates = np.array(D_list, dtype="datetime64[ns]")
+        return np.stack(X_list, axis=0), sids, dates
 
 
 # ------------------------------
@@ -686,7 +689,7 @@ class Preprocessor:
     def build_patch_train(self, df_full: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         return self.windowizer.build_patch_train(df_full)
 
-    def build_patch_eval(self, df_eval_full: pd.DataFrame) -> Tuple[np.ndarray, List[Tuple[str, pd.Timestamp]]]:
+    def build_patch_eval(self, df_eval_full: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         return self.windowizer.build_patch_eval(df_eval_full)
 
     # --------------------------
@@ -828,13 +831,13 @@ def main():
 
         # Build PatchTST eval windows
         if args.patch_eval_npy:
-            X_eval, meta = pp.build_patch_eval(df_eval_full)
+            X_eval, sids, dates = pp.build_patch_eval(df_eval_full)
             x_path = args.patch_eval_npy + "_X.npy"
             m_path = args.patch_eval_npy + "_meta.json"
             os.makedirs(os.path.dirname(x_path), exist_ok=True)
             np.save(x_path, X_eval)
             with open(m_path, "w", encoding="utf-8") as f:
-                json.dump([{"series_id": sid, "asof": str(ts.date())} for sid, ts in meta], f, ensure_ascii=False,
+                json.dump([{"series_id": sid, "asof": str(ts.date())} for sid, ts in zip(sids, dates)], f, ensure_ascii=False,
                           indent=2)
             print(f"PatchTST eval windows saved: {x_path}, meta: {m_path}")
         return
@@ -874,10 +877,10 @@ if HARDCODED and __name__ == "__main__":
         print(f"[HARDCODED] LGBM eval saved: {LGBM_EVAL_OUT}  rows={len(lgbm_eval)}")
 
         # PatchTST용 평가 윈도
-        X_eval, meta = pp.build_patch_eval(df_eval_full)
+        X_eval, sids, dates = pp.build_patch_eval(df_eval_full)
         np.save(PATCH_EVAL_OUT + "_X.npy", X_eval)
         with open(PATCH_EVAL_OUT + "_meta.json", "w", encoding="utf-8") as f:
-            json.dump([{"series_id": sid, "asof": str(ts.date())} for sid, ts in meta], f, ensure_ascii=False, indent=2)
+            json.dump([{"series_id": sid, "asof": str(ts.date())} for sid, ts in zip(sids, dates)], f, ensure_ascii=False, indent=2)
         print(f"[HARDCODED] Patch eval saved: {PATCH_EVAL_OUT}_X.npy, {PATCH_EVAL_OUT}_meta.json, windows={len(X_eval)}")
 
     sys.exit(0)

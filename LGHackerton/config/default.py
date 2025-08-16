@@ -35,13 +35,14 @@ LGBM_PARAMS = dict(
 PATCH_PARAMS = dict(
     d_model=128, n_heads=8, depth=4,
     patch_len=4, stride=1, dropout=0.1,
+    id_embed_dim=16,
     lr=1e-3, weight_decay=1e-4, batch_size=256,
     max_epochs=200, patience=20,
 )
 TRAIN_CFG = dict(
     seed=42, n_folds=3, cv_stride=7,
     priority_weight=3.0,
-    use_weighted_loss=False,
+    use_weighted_loss=True,
     use_asinh_target=False,
     use_hurdle=False,
     model_dir=MODEL_DIR,

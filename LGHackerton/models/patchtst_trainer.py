@@ -24,6 +24,7 @@ class PatchTSTParams:
     patch_len:int=4
     stride:int=1
     dropout:float=0.1
+    id_embed_dim:int=16
     lr:float=1e-3
     weight_decay:float=1e-4
     batch_size:int=256
@@ -40,12 +41,12 @@ class PatchTSTParams:
     min_val_samples:int=28
 
 class _SeriesDataset(Dataset):
-    def __init__(self, X: np.ndarray, y: np.ndarray, series_ids: Optional[Iterable[str]] = None):
+    def __init__(self, X: np.ndarray, y: np.ndarray, series_ids: Optional[Iterable[int]] = None):
         self.X = X.astype(np.float32)
         self.y = y.astype(np.float32)
         if series_ids is None:
-            series_ids = ["" for _ in range(len(X))]
-        self.sids = np.array(list(series_ids))
+            series_ids = [0 for _ in range(len(X))]
+        self.sids = np.array(list(series_ids), dtype=np.int64)
     def __len__(self):
         return self.X.shape[0]
     def __getitem__(self, idx):
@@ -53,7 +54,7 @@ class _SeriesDataset(Dataset):
         mu = x.mean(); std = x.std()
         if std == 0: std = 1.0
         x = (x - mu) / std
-        return x, self.y[idx], self.sids[idx]
+        return x, self.y[idx], int(self.sids[idx])
 
 if TORCH_OK:
     class PatchTSTBlock(nn.Module):
@@ -71,7 +72,7 @@ if TORCH_OK:
             return x
 
     class PatchTSTNet(nn.Module):
-        def __init__(self, L:int, H:int, d_model:int, n_heads:int, depth:int, patch_len:int, stride:int, dropout:float):
+        def __init__(self, L:int, H:int, d_model:int, n_heads:int, depth:int, patch_len:int, stride:int, dropout:float, id_embed_dim:int=0, num_series:int=0):
             super().__init__()
             self.L, self.H = L, H
             self.unfold = nn.Unfold(kernel_size=(patch_len,1), stride=(stride,1))
@@ -79,11 +80,22 @@ if TORCH_OK:
             self.blocks = nn.ModuleList([PatchTSTBlock(d_model, n_heads, dropout) for _ in range(depth)])
             self.norm = nn.LayerNorm(d_model)
             self.head = nn.Sequential(nn.Linear(d_model, d_model), nn.GELU(), nn.Linear(d_model, H))
-        def forward(self, x):
+            if id_embed_dim > 0 and num_series > 0:
+                self.id_embed = nn.Embedding(num_series, id_embed_dim)
+                self.id_proj = nn.Linear(id_embed_dim, d_model) if id_embed_dim != d_model else None
+            else:
+                self.id_embed = None
+                self.id_proj = None
+        def forward(self, x, sid_idx=None):
             B,L,C = x.shape
             x2 = x.view(B,1,L,1)
             p = self.unfold(x2).squeeze(1).transpose(1,2)
             z = self.proj(p)
+            if self.id_embed is not None and sid_idx is not None:
+                e = self.id_embed(sid_idx)
+                if self.id_proj is not None:
+                    e = self.id_proj(e)
+                z = z + e.unsqueeze(1)
             for blk in self.blocks: z = blk(z)
             z = self.norm(z).mean(1)
             return self.head(z)
@@ -94,6 +106,8 @@ class PatchTSTTrainer(BaseModel):
         self.params = params; self.L=L; self.H=H
         self.models: List[Any] = []
         self.device="cpu"
+        self.id2idx={}
+        self.idx2id=[]
     def _ensure_torch(self):
         if not TORCH_OK: raise RuntimeError(f"PyTorch not available: {_TORCH_ERR}")
     def train(self, X_train: np.ndarray, y_train: np.ndarray, series_ids: np.ndarray, label_dates: np.ndarray, cfg: TrainConfig) -> None:
@@ -104,6 +118,10 @@ class PatchTSTTrainer(BaseModel):
         X_train = X_train[order]; y_train = y_train[order]
         series_ids = np.array(series_ids)[order]
         label_dates = label_dates[order]
+        unique_sids = sorted(set(series_ids))
+        self.id2idx = {sid:i for i,sid in enumerate(unique_sids)}
+        self.idx2id = unique_sids
+        series_idx = np.array([self.id2idx[s] for s in series_ids], dtype=np.int64)
         n = len(label_dates)
         min_samples = max(cfg.min_val_samples, 5 * self.params.batch_size)
         purge_days = cfg.purge_days if cfg.purge_days > 0 else (self.L + self.H if cfg.purge_mode == "L+H" else self.L)
@@ -197,22 +215,23 @@ class PatchTSTTrainer(BaseModel):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.models = []
         for i,(tr_mask,va_mask) in enumerate(folds):
-            tr_ds = _SeriesDataset(X_train[tr_mask], y_train[tr_mask], series_ids[tr_mask])
-            va_ds = _SeriesDataset(X_train[va_mask], y_train[va_mask], series_ids[va_mask])
+            tr_ds = _SeriesDataset(X_train[tr_mask], y_train[tr_mask], series_idx[tr_mask])
+            va_ds = _SeriesDataset(X_train[va_mask], y_train[va_mask], series_idx[va_mask])
             tr_loader = DataLoader(tr_ds, batch_size=self.params.batch_size, shuffle=True)
             va_loader = DataLoader(va_ds, batch_size=self.params.batch_size, shuffle=False)
             net = PatchTSTNet(self.L,self.H,self.params.d_model,self.params.n_heads,self.params.depth,
-                              self.params.patch_len,self.params.stride,self.params.dropout).to(self.device)
+                              self.params.patch_len,self.params.stride,self.params.dropout,
+                              self.params.id_embed_dim,len(self.id2idx)).to(self.device)
             opt = torch.optim.AdamW(net.parameters(), lr=self.params.lr, weight_decay=self.params.weight_decay)
             loss_fn = torch.nn.L1Loss()
             best=float("inf"); best_state=None; bad=0
             for ep in range(self.params.max_epochs):
                 net.train()
                 for xb,yb,sb in tr_loader:
-                    xb, yb = xb.to(self.device), yb.to(self.device)
-                    opt.zero_grad(); pred = net(xb)
+                    xb, yb, sb = xb.to(self.device), yb.to(self.device), sb.to(self.device)
+                    opt.zero_grad(); pred = net(xb, sb)
                     if cfg.use_weighted_loss:
-                        outlets = [sid.split("::")[0] for sid in sb]
+                        outlets = [self.idx2id[int(i)].split("::")[0] for i in sb.cpu().tolist()]
                         w = torch.tensor([cfg.priority_weight if o in PRIORITY_OUTLETS else 1.0 for o in outlets], device=self.device).view(-1,1)
                         loss = (torch.abs(pred - yb) * w).mean()
                     else:
@@ -221,12 +240,12 @@ class PatchTSTTrainer(BaseModel):
                 net.eval(); P=[]; T=[]; S=[]
                 with torch.no_grad():
                     for xb,yb,sb in va_loader:
-                        xb, yb = xb.to(self.device), yb.to(self.device)
-                        out = net(xb)
-                        P.append(out.cpu().numpy()); T.append(yb.cpu().numpy()); S.extend(sb)
+                        xb, yb, sb = xb.to(self.device), yb.to(self.device), sb.to(self.device)
+                        out = net(xb, sb)
+                        P.append(out.cpu().numpy()); T.append(yb.cpu().numpy()); S.extend(sb.cpu().tolist())
                 y_pred = np.clip(np.concatenate(P,0),0,None)
                 y_true = np.concatenate(T,0)
-                series_ids_val = np.array(S)
+                series_ids_val = np.array([self.idx2id[int(i)] for i in S])
                 outlets = [sid.split("::")[0] for sid in series_ids_val]
                 eps = 1e-8
                 w_val = weighted_smape_np(
@@ -251,17 +270,19 @@ class PatchTSTTrainer(BaseModel):
                 net.load_state_dict(best_state)
             self.models.append(net)
         self.save(os.path.join(self.model_dir,"patchtst.pt"))
-    def predict(self, X_eval: np.ndarray) -> np.ndarray:
+    def predict(self, X_eval: np.ndarray, series_idx: Optional[Iterable[int]] = None) -> np.ndarray:
         self._ensure_torch(); import torch
         if not self.models:
             raise RuntimeError("Model not loaded.")
-        ds = _SeriesDataset(X_eval, np.zeros((X_eval.shape[0], self.H), dtype=np.float32))
+        if series_idx is None:
+            series_idx = np.zeros(len(X_eval), dtype=np.int64)
+        ds = _SeriesDataset(X_eval, np.zeros((X_eval.shape[0], self.H), dtype=np.float32), series_idx)
         loader = torch.utils.data.DataLoader(ds, batch_size=self.params.batch_size, shuffle=False)
         outs=[]
         with torch.no_grad():
-            for xb,_,_ in loader:
-                xb = xb.to(self.device)
-                preds = [m(xb).cpu().numpy() for m in self.models]
+            for xb,_,sb in loader:
+                xb, sb = xb.to(self.device), sb.to(self.device)
+                preds = [m(xb, sb).cpu().numpy() for m in self.models]
                 outs.append(np.mean(preds, axis=0))
         yhat = np.clip(np.concatenate(outs,0),0,None)
         return yhat
@@ -275,21 +296,31 @@ class PatchTSTTrainer(BaseModel):
             torch.save(m.state_dict(), fpath)
             index.append(os.path.basename(fpath))
         with open(path.replace(".pt",".json"),"w",encoding="utf-8") as f:
-            json.dump({"params":self.model_params,"L":self.L,"H":self.H,"index":index},f,ensure_ascii=False,indent=2)
+            json.dump({"params":self.model_params,"L":self.L,"H":self.H,"index":index,"id2idx":self.id2idx},f,ensure_ascii=False,indent=2)
     def load(self, path:str)->None:
         self._ensure_torch(); import torch, json, os
         meta=path.replace(".pt",".json")
         if os.path.exists(meta):
             with open(meta,"r",encoding="utf-8") as f:
-                m=json.load(f); self.model_params=m.get("params",self.model_params); self.L=int(m.get("L",self.L)); self.H=int(m.get("H",self.H)); index=m.get("index",[])
+                m=json.load(f)
+                self.model_params=m.get("params",self.model_params)
+                self.L=int(m.get("L",self.L))
+                self.H=int(m.get("H",self.H))
+                index=m.get("index",[])
+                self.id2idx=m.get("id2idx",{})
         else:
             index=[]
+            self.id2idx={}
+        self.idx2id=[None]*len(self.id2idx)
+        for sid,idx in self.id2idx.items():
+            self.idx2id[int(idx)] = sid
         self.params = PatchTSTParams(**self.model_params)
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.models=[]
         for fname in index:
             net = PatchTSTNet(self.L,self.H,self.params.d_model,self.params.n_heads,self.params.depth,
-                               self.params.patch_len,self.params.stride,self.params.dropout)
+                               self.params.patch_len,self.params.stride,self.params.dropout,
+                               self.params.id_embed_dim,len(self.id2idx))
             net.load_state_dict(torch.load(os.path.join(self.model_dir,fname), map_location=self.device))
             net.to(self.device)
             self.models.append(net)

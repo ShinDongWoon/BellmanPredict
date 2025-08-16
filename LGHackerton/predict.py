@@ -28,7 +28,7 @@ def main():
     df_eval_full = pp.transform_eval(df_eval_raw)
 
     lgbm_eval = pp.build_lgbm_eval(df_eval_full)
-    X_eval, meta = pp.build_patch_eval(df_eval_full)
+    X_eval, sids, _ = pp.build_patch_eval(df_eval_full)
 
     from models.base_trainer import TrainConfig
     cfg = TrainConfig(**TRAIN_CFG)
@@ -40,11 +40,11 @@ def main():
     if TORCH_OK and os.path.exists(os.path.join(cfg.model_dir,"patchtst.pt")):
         pt = PatchTSTTrainer(params=PatchTSTParams(**PATCH_PARAMS), L=L, H=H, model_dir=cfg.model_dir)
         pt.load(os.path.join(cfg.model_dir,"patchtst.pt"))
-        y_patch = pt.predict(X_eval)
+        sid_idx = np.array([pt.id2idx[sid] for sid in sids])
+        y_patch = pt.predict(X_eval, sid_idx)
 
     out = df_lgb.copy()
     if y_patch is not None:
-        sids = [sid for sid,_ in meta]
         reps = np.repeat(sids, H); hs = np.tile(np.arange(1,H+1), len(sids))
         dfp = pd.DataFrame({"series_id": reps, "h": hs, "yhat_patch": y_patch.reshape(-1)})
         out = out.merge(dfp, on=["series_id","h"], how="left")
