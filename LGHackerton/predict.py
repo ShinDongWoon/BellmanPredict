@@ -5,6 +5,7 @@ import glob
 import re
 import numpy as np
 import pandas as pd
+import logging
 
 from LGHackerton.preprocess import Preprocessor, L, H
 from LGHackerton.models.lgbm_trainer import LGBMTrainer, LGBMParams
@@ -34,13 +35,19 @@ def _read_table(path: str) -> pd.DataFrame:
 
 def convert_to_submission(pred_df: pd.DataFrame, sample_path: str) -> pd.DataFrame:
     sample_df = _read_table(sample_path)
-    pred_dict = {(row.date, row.series_id): row.yhat_ens for row in pred_df.itertuples()}
-    date_col = sample_df.columns[0]
-    out_df = sample_df.copy()
-    for idx, row in out_df.iterrows():
-        date = row[date_col]
-        for col in out_df.columns[1:]:
-            out_df.at[idx, col] = pred_dict.get((date, col), 0.0)
+    wide = pred_df.pivot(index="date", columns="series_id", values="yhat_ens")
+    wide = wide.reindex(sample_df.iloc[:, 0]).reindex(columns=sample_df.columns[1:], fill_value=0.0)
+
+    missing_dates = set(sample_df.iloc[:, 0]) - set(pred_df["date"])
+    missing_cols = set(sample_df.columns[1:]) - set(pred_df["series_id"].unique())
+
+    if missing_dates:
+        logging.warning("Missing dates in predictions: %s", sorted(missing_dates))
+    if missing_cols:
+        logging.warning("Missing columns in predictions: %s", sorted(missing_cols))
+
+    out_df = pd.concat([sample_df.iloc[:, 0], wide], axis=1)
+    out_df.columns = sample_df.columns
     return out_df
 
 def main():
