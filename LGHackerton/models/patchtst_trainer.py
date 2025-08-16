@@ -102,11 +102,11 @@ if TORCH_OK:
             return self.head(z)
 
 class PatchTSTTrainer(BaseModel):
-    def __init__(self, params: PatchTSTParams, L:int, H:int, model_dir: str):
+    def __init__(self, params: PatchTSTParams, L:int, H:int, model_dir: str, device: str):
         super().__init__(model_params=asdict(params), model_dir=model_dir)
         self.params = params; self.L=L; self.H=H
         self.models: List[Any] = []
-        self.device="cpu"
+        self.device = device  # 'cpu', 'cuda', or 'mps'
         self.id2idx={}
         self.idx2id=[]
         self.oof_records: List[Dict[str, Any]] = []
@@ -220,8 +220,9 @@ class PatchTSTTrainer(BaseModel):
         for i,(tr_mask,va_mask) in enumerate(folds):
             tr_ds = _SeriesDataset(X_train[tr_mask], y_train[tr_mask], series_idx[tr_mask])
             va_ds = _SeriesDataset(X_train[va_mask], y_train[va_mask], series_idx[va_mask])
-            tr_loader = DataLoader(tr_ds, batch_size=self.params.batch_size, shuffle=True)
-            va_loader = DataLoader(va_ds, batch_size=self.params.batch_size, shuffle=False)
+            pin = self.device != "cpu"
+            tr_loader = DataLoader(tr_ds, batch_size=self.params.batch_size, shuffle=True, pin_memory=pin)
+            va_loader = DataLoader(va_ds, batch_size=self.params.batch_size, shuffle=False, pin_memory=pin)
             net = PatchTSTNet(self.L,self.H,self.params.d_model,self.params.n_heads,self.params.depth,
                               self.params.patch_len,self.params.stride,self.params.dropout,
                               self.params.id_embed_dim,len(self.id2idx)).to(self.device)
@@ -231,7 +232,9 @@ class PatchTSTTrainer(BaseModel):
             for ep in range(self.params.max_epochs):
                 net.train()
                 for xb,yb,sb in tr_loader:
-                    xb, yb, sb = xb.to(self.device), yb.to(self.device), sb.to(self.device)
+                    xb = xb.to(self.device, non_blocking=pin)
+                    yb = yb.to(self.device, non_blocking=pin)
+                    sb = sb.to(self.device, non_blocking=pin)
                     opt.zero_grad(); pred = net(xb, sb)
                     if cfg.use_weighted_loss:
                         outlets = [self.idx2id[int(i)].split("::")[0] for i in sb.cpu().tolist()]
@@ -243,7 +246,9 @@ class PatchTSTTrainer(BaseModel):
                 net.eval(); P=[]; T=[]; S=[]
                 with torch.no_grad():
                     for xb,yb,sb in va_loader:
-                        xb, yb, sb = xb.to(self.device), yb.to(self.device), sb.to(self.device)
+                        xb = xb.to(self.device, non_blocking=pin)
+                        yb = yb.to(self.device, non_blocking=pin)
+                        sb = sb.to(self.device, non_blocking=pin)
                         out = net(xb, sb)
                         P.append(out.cpu().numpy()); T.append(yb.cpu().numpy()); S.extend(sb.cpu().tolist())
                 y_pred = np.clip(np.concatenate(P,0),0,None)
@@ -276,7 +281,8 @@ class PatchTSTTrainer(BaseModel):
             P=[]
             with torch.no_grad():
                 for xb, yb, sb in va_loader:
-                    xb, sb = xb.to(self.device), sb.to(self.device)
+                    xb = xb.to(self.device, non_blocking=pin)
+                    sb = sb.to(self.device, non_blocking=pin)
                     out = net(xb, sb)
                     P.append(out.cpu().numpy())
             y_pred = np.clip(np.concatenate(P,0),0,None)
@@ -298,11 +304,13 @@ class PatchTSTTrainer(BaseModel):
         if series_idx is None:
             series_idx = np.zeros(len(X_eval), dtype=np.int64)
         ds = _SeriesDataset(X_eval, np.zeros((X_eval.shape[0], self.H), dtype=np.float32), series_idx)
-        loader = torch.utils.data.DataLoader(ds, batch_size=self.params.batch_size, shuffle=False)
+        pin = self.device != "cpu"
+        loader = torch.utils.data.DataLoader(ds, batch_size=self.params.batch_size, shuffle=False, pin_memory=pin)
         outs=[]
         with torch.no_grad():
             for xb,_,sb in loader:
-                xb, sb = xb.to(self.device), sb.to(self.device)
+                xb = xb.to(self.device, non_blocking=pin)
+                sb = sb.to(self.device, non_blocking=pin)
                 preds = [m(xb, sb).cpu().numpy() for m in self.models]
                 outs.append(np.mean(preds, axis=0))
         yhat = np.clip(np.concatenate(outs,0),0,None)
@@ -340,12 +348,11 @@ class PatchTSTTrainer(BaseModel):
         for sid,idx in self.id2idx.items():
             self.idx2id[int(idx)] = sid
         self.params = PatchTSTParams(**self.model_params)
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.models=[]
         for fname in index:
             net = PatchTSTNet(self.L,self.H,self.params.d_model,self.params.n_heads,self.params.depth,
                                self.params.patch_len,self.params.stride,self.params.dropout,
                                self.params.id_embed_dim,len(self.id2idx))
-            net.load_state_dict(torch.load(os.path.join(self.model_dir,fname), map_location=self.device))
+            net.load_state_dict(torch.load(os.path.join(self.model_dir,fname), map_location=torch.device(self.device)))
             net.to(self.device)
             self.models.append(net)

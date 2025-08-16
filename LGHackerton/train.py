@@ -7,6 +7,7 @@ from LGHackerton.preprocess import Preprocessor, DATE_COL, SERIES_COL, SALES_COL
 from LGHackerton.models.base_trainer import TrainConfig
 from LGHackerton.models.lgbm_trainer import LGBMParams, LGBMTrainer
 from LGHackerton.models.patchtst_trainer import PatchTSTParams, PatchTSTTrainer, TORCH_OK
+from LGHackerton.utils.device import select_device
 from LGHackerton.config.default import (
     TRAIN_PATH,
     ARTIFACTS_PATH,
@@ -28,6 +29,8 @@ def _read_table(path: str) -> pd.DataFrame:
     raise ValueError("Unsupported file type. Use .csv or .xlsx")
 
 def main():
+    device = select_device()  # ask user for compute environment
+
     df_train_raw = _read_table(TRAIN_PATH)
     pp = Preprocessor()
     df_full = pp.fit_transform_train(df_train_raw)
@@ -39,13 +42,13 @@ def main():
     lgb_params = LGBMParams(**LGBM_PARAMS)
     cfg = TrainConfig(**TRAIN_CFG)
     set_seed(cfg.seed)
-    lgb_tr = LGBMTrainer(params=lgb_params, features=pp.feature_cols, model_dir=cfg.model_dir)
+    lgb_tr = LGBMTrainer(params=lgb_params, features=pp.feature_cols, model_dir=cfg.model_dir, device=device)
     lgb_tr.train(lgbm_train, cfg)
     lgb_tr.get_oof().to_csv(OOF_LGBM_OUT, index=False)
 
     if TORCH_OK:
         patch_params = PatchTSTParams(**PATCH_PARAMS)
-        pt_tr = PatchTSTTrainer(params=patch_params, L=L, H=H, model_dir=cfg.model_dir)
+        pt_tr = PatchTSTTrainer(params=patch_params, L=L, H=H, model_dir=cfg.model_dir, device=device)
         pt_tr.train(X_train, y_train, series_ids, label_dates, cfg)
         pt_tr.get_oof().to_csv(OOF_PATCH_OUT, index=False)
 
