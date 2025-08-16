@@ -101,22 +101,21 @@ class EnsembleManager:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f)
 
-    @classmethod
-    def load(cls, path: str = "artifacts/ensemble_meta.json") -> "EnsembleManager":
+    def load(self, path: str = "artifacts/ensemble_meta.json") -> "EnsembleManager":
         """Load ensemble configuration and weights if available."""
-        manager = cls()
         if not os.path.exists(path):
-            return manager
+            return self
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        manager.cfg = data.get("cfg", {})
-        manager.fallback = manager.cfg.get("fallback", "median")
+        self.cfg = data.get("cfg", {})
+        self.fallback = self.cfg.get("fallback", "median")
         w = data.get("weights")
         if w is not None:
-            manager.weights = np.asarray(w, dtype=float)
+            self.weights = np.asarray(w, dtype=float)
         model_file = data.get("model_file")
         if model_file and os.path.exists(model_file):
             import lightgbm as lgb
 
-            manager.meta_model = lgb.Booster(model_file=model_file)
-        return manager
+            self.meta_model = lgb.Booster(model_file=model_file)
+        return self
+
