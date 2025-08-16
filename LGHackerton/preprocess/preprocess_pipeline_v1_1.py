@@ -530,9 +530,6 @@ class SampleWindowizer:
         vprint(f"[LGBM/EVAL] rows={len(_out)}  feats={len(feature_cols)}")
         return _out
 
-
-        return pd.DataFrame(out_rows).reset_index(drop=True)
-
     def build_patch_train(
             self, df: pd.DataFrame
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
