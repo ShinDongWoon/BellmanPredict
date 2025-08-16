@@ -506,11 +506,13 @@ class SampleWindowizer:
         return out.reset_index(drop=True)
 
     def build_lgbm_eval(
-            self, df_eval: pd.DataFrame, feature_cols: List[str]
+            self, df_eval: pd.DataFrame, feature_cols: List[str], show_progress: bool = False
     ) -> pd.DataFrame:
         d = df_eval.sort_values([SERIES_COL, DATE_COL]).copy()
         out_rows = []
-        for sid, g in d.groupby(SERIES_COL, sort=False):
+        gb = d.groupby(SERIES_COL, sort=False)
+        total = d[SERIES_COL].nunique()
+        for sid, g in get_progress_bar(gb, total=total, disable=not show_progress):
             g = g.reset_index(drop=True)
             if len(g) == 0:
                 continue
@@ -523,16 +525,16 @@ class SampleWindowizer:
                 SERIES_COL: sid,
                 DATE_COL: g.loc[t, DATE_COL],
             }
-            feat = g.loc[t, feature_cols]
+            feat_dict = g.loc[t, feature_cols].to_dict()
             for h in range(1, self.H + 1):
-                row = pd.concat([pd.Series({**base, "h": h}), feat])
+                row = {**base, **feat_dict, "h": h}
                 out_rows.append(row)
         if not out_rows:
             raise RuntimeError("No eval rows produced.")
 
-        _out = pd.DataFrame(out_rows).reset_index(drop=True)
-        vprint(f"[LGBM/EVAL] rows={len(_out)}  feats={len(feature_cols)}")
-        return _out
+        out = pd.DataFrame(out_rows).reset_index(drop=True)
+        vprint(f"[LGBM/EVAL] rows={len(out)}  feats={len(feature_cols)}")
+        return out
 
     def build_patch_train(
             self, df: pd.DataFrame
@@ -722,7 +724,9 @@ class Preprocessor:
         return self.windowizer.build_lgbm_train(df_full, self.feature_cols)
 
     def build_lgbm_eval(self, df_eval_full: pd.DataFrame) -> pd.DataFrame:
-        return self.windowizer.build_lgbm_eval(df_eval_full, self.feature_cols)
+        return self.windowizer.build_lgbm_eval(
+            df_eval_full, self.feature_cols, show_progress=self.show_progress
+        )
 
     def build_patch_train(self, df_full: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         return self.windowizer.build_patch_train(df_full)
