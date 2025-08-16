@@ -29,6 +29,9 @@ PATCH_PRED_OUT  = str((ARTIFACTS_DIR / "eval_patch.csv").resolve())
 OOF_LGBM_OUT  = str((ARTIFACTS_DIR / "oof_lgbm.csv").resolve())
 OOF_PATCH_OUT = str((ARTIFACTS_DIR / "oof_patch.csv").resolve())
 
+# preprocessing options
+SHOW_PROGRESS = True
+
 # 하이퍼파라미터(필요 시 그대로 유지)
 LGBM_PARAMS = dict(
     objective="tweedie",
