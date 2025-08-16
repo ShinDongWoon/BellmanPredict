@@ -12,6 +12,7 @@ except Exception as e:
 
 from models.lgbm_trainer import LGBMTrainer, LGBMParams
 from models.patchtst_trainer import PatchTSTTrainer, PatchTSTParams, TORCH_OK
+from utils.ensemble_manager import EnsembleManager
 from config.default import (
     EVAL_PATH,
     ARTIFACTS_PATH,
@@ -44,23 +45,29 @@ def main():
     lgb.load(os.path.join(cfg.model_dir, "lgbm_models.json"))
     df_lgb = lgb.predict(lgbm_eval)
 
-    y_patch=None
-    if TORCH_OK and os.path.exists(os.path.join(cfg.model_dir,"patchtst.pt")):
+    y_patch = None
+    if TORCH_OK and os.path.exists(os.path.join(cfg.model_dir, "patchtst.pt")):
         pt = PatchTSTTrainer(params=PatchTSTParams(**PATCH_PARAMS), L=L, H=H, model_dir=cfg.model_dir)
-        pt.load(os.path.join(cfg.model_dir,"patchtst.pt"))
+        pt.load(os.path.join(cfg.model_dir, "patchtst.pt"))
         sid_idx = np.array([pt.id2idx[sid] for sid in sids])
         y_patch = pt.predict(X_eval, sid_idx)
 
     out = df_lgb.copy()
     if y_patch is not None:
-        reps = np.repeat(sids, H); hs = np.tile(np.arange(1,H+1), len(sids))
+        reps = np.repeat(sids, H)
+        hs = np.tile(np.arange(1, H + 1), len(sids))
         dfp = pd.DataFrame({"series_id": reps, "h": hs, "yhat_patch": y_patch.reshape(-1)})
-        out = out.merge(dfp, on=["series_id","h"], how="left")
-        out["yhat_ens_median"] = np.where(out["yhat_patch"].notna(),
-                                          np.median(np.stack([out["yhat_lgbm"].values, out["yhat_patch"].values],0),0),
-                                          out["yhat_lgbm"].values)
+        out = out.merge(dfp, on=["series_id", "h"], how="left")
     else:
-        out["yhat_patch"]=np.nan; out["yhat_ens_median"]=out["yhat_lgbm"]
+        out["yhat_patch"] = np.nan
+
+    ens = EnsembleManager()
+    ens.load(os.path.join(cfg.model_dir, "ensemble_meta.json"))
+    yhat_ens = ens.predict(
+        df_lgb["yhat_lgbm"].values,
+        out.get("yhat_patch").values,
+    )
+    out["yhat_ens"] = np.where(out["yhat_patch"].notna(), yhat_ens, df_lgb["yhat_lgbm"].values)
 
     os.makedirs(os.path.dirname(LGBM_EVAL_OUT), exist_ok=True)
     out.to_csv(LGBM_EVAL_OUT, index=False, encoding="utf-8-sig")
