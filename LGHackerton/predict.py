@@ -26,7 +26,7 @@ from LGHackerton.utils.seed import set_seed
 
 def _read_table(path: str) -> pd.DataFrame:
     if path.lower().endswith(".csv"):
-        return pd.read_csv(path)
+        return pd.read_csv(path, encoding="utf-8-sig")
     if path.lower().endswith((".xls", ".xlsx")):
         return pd.read_excel(path)
     raise ValueError("Unsupported file type. Use .csv or .xlsx")
@@ -34,6 +34,7 @@ def _read_table(path: str) -> pd.DataFrame:
 
 def convert_to_submission(pred_df: pd.DataFrame, sample_path: str) -> pd.DataFrame:
     sample_df = _read_table(sample_path)
+    sample_df.columns = sample_df.columns.str.strip().str.lstrip('\ufeff')
     pred_dict = {(row.date, row.series_id): row.yhat_ens for row in pred_df.itertuples()}
     date_col = sample_df.columns[0]
     out_df = sample_df.copy()
