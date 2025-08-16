@@ -18,6 +18,7 @@ from config.default import (
     PATCH_PARAMS,
     TRAIN_CFG,
     ARTIFACTS_DIR,
+    ENSEMBLE_CFG,
 )
 
 def _read_table(path: str) -> pd.DataFrame:

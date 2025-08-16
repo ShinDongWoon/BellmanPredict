@@ -56,3 +56,8 @@ TRAIN_CFG = dict(
     min_val_samples=28,
     purge_mode="L",
 )
+
+ENSEMBLE_CFG = {
+    "type": "nnls",
+    "fallback": "median",
+}
