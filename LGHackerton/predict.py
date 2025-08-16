@@ -12,8 +12,16 @@ except Exception as e:
 
 from models.lgbm_trainer import LGBMTrainer, LGBMParams
 from models.patchtst_trainer import PatchTSTTrainer, PatchTSTParams, TORCH_OK
-from config.default import (EVAL_PATH, ARTIFACTS_PATH, LGBM_EVAL_OUT, PATCH_EVAL_OUT,
-                            LGBM_PARAMS, PATCH_PARAMS, TRAIN_CFG)
+from config.default import (
+    EVAL_PATH,
+    ARTIFACTS_PATH,
+    LGBM_EVAL_OUT,
+    PATCH_EVAL_OUT,
+    LGBM_PARAMS,
+    PATCH_PARAMS,
+    TRAIN_CFG,
+    ENSEMBLE_CFG,
+)
 
 def _read_table(path: str) -> pd.DataFrame:
     if path.lower().endswith(".csv"):
