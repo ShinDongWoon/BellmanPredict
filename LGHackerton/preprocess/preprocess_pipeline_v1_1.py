@@ -44,7 +44,7 @@ PRIORITY_OUTLETS = {"담하", "미라시아"}
 L = 28  # lookback window
 H = 7  # forecast horizon
 # ----- Verbose print helper -----
-VERBOSE = True  # 필요시 False
+VERBOSE = False  # 필요시 False
 
 
 def vprint(msg: str) -> None:
@@ -71,7 +71,7 @@ def ensure_datetime_series(s: pd.Series) -> pd.Series:
 
 
 def warn(msg: str):
-    print(f"[WARN] {msg}")
+    vprint(f"[WARN] {msg}")
 
 
 # ------------------------------
@@ -805,8 +805,8 @@ def main():
             df_full.to_parquet(args.train_out, index=False)
 
         pp.save(args.artifacts)
-        print(f"Artifacts saved to {args.artifacts}")
-        print(
+        vprint(f"Artifacts saved to {args.artifacts}")
+        vprint(
             f"Feature columns ({len(pp.feature_cols)}): {pp.feature_cols[:10]}{'...' if len(pp.feature_cols) > 10 else ''}")
         return
 
@@ -827,7 +827,7 @@ def main():
             lgbm_eval = pp.build_lgbm_eval(df_eval_full)
             os.makedirs(os.path.dirname(args.lgbm_eval_csv), exist_ok=True)
             lgbm_eval.to_csv(args.lgbm_eval_csv, index=False, encoding="utf-8-sig")
-            print(f"LGBM eval rows saved: {args.lgbm_eval_csv}")
+            vprint(f"LGBM eval rows saved: {args.lgbm_eval_csv}")
 
         # Build PatchTST eval windows
         if args.patch_eval_npy:
@@ -839,14 +839,14 @@ def main():
             with open(m_path, "w", encoding="utf-8") as f:
                 json.dump([{"series_id": sid, "asof": str(ts.date())} for sid, ts in zip(sids, dates)], f, ensure_ascii=False,
                           indent=2)
-            print(f"PatchTST eval windows saved: {x_path}, meta: {m_path}")
+            vprint(f"PatchTST eval windows saved: {x_path}, meta: {m_path}")
         return
 
     parser.print_help()
 
 # ----- Hardcoded runner (no-CLI) -----
 # 이 블록을 켜면 아래 지정 경로로 즉시 실행된다.
-HARDCODED = True  # 사용 안 하려면 False
+HARDCODED = False  # 사용 안 하려면 False
 if HARDCODED and __name__ == "__main__":
     import sys
 
@@ -863,8 +863,8 @@ if HARDCODED and __name__ == "__main__":
     df_train_raw = _read_table(TRAIN_PATH)
     df_full = pp.fit_transform_train(df_train_raw)
     pp.save(ARTIFACTS_PATH)
-    print(f"[HARDCODED] train processed: rows={len(df_full)}, cols={len(df_full.columns)}")
-    print(f"[HARDCODED] artifacts saved: {ARTIFACTS_PATH}")
+    vprint(f"[HARDCODED] train processed: rows={len(df_full)}, cols={len(df_full.columns)}")
+    vprint(f"[HARDCODED] artifacts saved: {ARTIFACTS_PATH}")
 
     # 2) 평가 전처리 + 산출물 저장(선택)
     if EVAL_PATH:
@@ -874,14 +874,14 @@ if HARDCODED and __name__ == "__main__":
         # LGBM용 평가 피처
         lgbm_eval = pp.build_lgbm_eval(df_eval_full)
         lgbm_eval.to_csv(LGBM_EVAL_OUT, index=False, encoding="utf-8-sig")
-        print(f"[HARDCODED] LGBM eval saved: {LGBM_EVAL_OUT}  rows={len(lgbm_eval)}")
+        vprint(f"[HARDCODED] LGBM eval saved: {LGBM_EVAL_OUT}  rows={len(lgbm_eval)}")
 
         # PatchTST용 평가 윈도
         X_eval, sids, dates = pp.build_patch_eval(df_eval_full)
         np.save(PATCH_EVAL_OUT + "_X.npy", X_eval)
         with open(PATCH_EVAL_OUT + "_meta.json", "w", encoding="utf-8") as f:
             json.dump([{"series_id": sid, "asof": str(ts.date())} for sid, ts in zip(sids, dates)], f, ensure_ascii=False, indent=2)
-        print(f"[HARDCODED] Patch eval saved: {PATCH_EVAL_OUT}_X.npy, {PATCH_EVAL_OUT}_meta.json, windows={len(X_eval)}")
+        vprint(f"[HARDCODED] Patch eval saved: {PATCH_EVAL_OUT}_X.npy, {PATCH_EVAL_OUT}_meta.json, windows={len(X_eval)}")
 
     sys.exit(0)
 
