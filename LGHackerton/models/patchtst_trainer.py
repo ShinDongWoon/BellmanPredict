@@ -1,8 +1,9 @@
 from __future__ import annotations
 import os, json, warnings
 import numpy as np
+import pandas as pd
 from dataclasses import dataclass, asdict
-from typing import Tuple, Iterable, Optional, List, Any
+from typing import Tuple, Iterable, Optional, List, Any, Dict
 
 try:
     import torch
@@ -108,12 +109,14 @@ class PatchTSTTrainer(BaseModel):
         self.device="cpu"
         self.id2idx={}
         self.idx2id=[]
+        self.oof_records: List[Dict[str, Any]] = []
     def _ensure_torch(self):
         if not TORCH_OK: raise RuntimeError(f"PyTorch not available: {_TORCH_ERR}")
     def train(self, X_train: np.ndarray, y_train: np.ndarray, series_ids: np.ndarray, label_dates: np.ndarray, cfg: TrainConfig) -> None:
         """Train PatchTST models under various validation policies."""
         self._ensure_torch(); import torch
         os.makedirs(self.model_dir, exist_ok=True)
+        self.oof_records = []
         order = np.argsort(label_dates)
         X_train = X_train[order]; y_train = y_train[order]
         series_ids = np.array(series_ids)[order]
@@ -268,6 +271,24 @@ class PatchTSTTrainer(BaseModel):
                     break
             if best_state is not None:
                 net.load_state_dict(best_state)
+            # compute OOF predictions for this fold
+            net.eval()
+            P=[]
+            with torch.no_grad():
+                for xb, yb, sb in va_loader:
+                    xb, sb = xb.to(self.device), sb.to(self.device)
+                    out = net(xb, sb)
+                    P.append(out.cpu().numpy())
+            y_pred = np.clip(np.concatenate(P,0),0,None)
+            y_true = y_train[va_mask]
+            series_ids_val = np.array(series_ids)[va_mask]
+            oof_df = pd.DataFrame({
+                "series_id": np.repeat(series_ids_val, self.H),
+                "h": np.tile(np.arange(1, self.H+1), len(series_ids_val)),
+                "y": y_true.reshape(-1),
+                "yhat": y_pred.reshape(-1),
+            })
+            self.oof_records.extend(oof_df.to_dict("records"))
             self.models.append(net)
         self.save(os.path.join(self.model_dir,"patchtst.pt"))
     def predict(self, X_eval: np.ndarray, series_idx: Optional[Iterable[int]] = None) -> np.ndarray:
@@ -286,6 +307,10 @@ class PatchTSTTrainer(BaseModel):
                 outs.append(np.mean(preds, axis=0))
         yhat = np.clip(np.concatenate(outs,0),0,None)
         return yhat
+
+    def get_oof(self) -> pd.DataFrame:
+        return pd.DataFrame(self.oof_records)
+
     def save(self, path:str)->None:
         if not TORCH_OK: return
         import torch
