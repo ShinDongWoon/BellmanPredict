@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 import os, sys
+import random
+import numpy as np
 import pandas as pd
 
 try:
@@ -21,6 +23,20 @@ from config.default import (
     ENSEMBLE_CFG,
 )
 
+
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    try:
+        import torch
+
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    except Exception:
+        pass
+
 def _read_table(path: str) -> pd.DataFrame:
     if path.lower().endswith(".csv"):
         return pd.read_csv(path)
@@ -39,6 +55,7 @@ def main():
 
     lgb_params = LGBMParams(**LGBM_PARAMS)
     cfg = TrainConfig(**TRAIN_CFG)
+    set_seed(cfg.seed)
     lgb_tr = LGBMTrainer(params=lgb_params, features=pp.feature_cols, model_dir=cfg.model_dir)
     lgb_tr.train(lgbm_train, cfg)
     lgb_tr.get_oof().to_csv(ARTIFACTS_DIR / "oof_lgbm.csv", index=False)
