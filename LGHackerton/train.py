@@ -29,6 +29,7 @@ def _read_table(path: str) -> pd.DataFrame:
     raise ValueError("Unsupported file type. Use .csv or .xlsx")
 
 def main():
+    os.makedirs(ARTIFACTS_DIR, exist_ok=True)
     device = select_device()  # ask user for compute environment
 
     df_train_raw = _read_table(TRAIN_PATH)
@@ -41,6 +42,7 @@ def main():
 
     lgb_params = LGBMParams(**LGBM_PARAMS)
     cfg = TrainConfig(**TRAIN_CFG)
+    os.makedirs(cfg.model_dir, exist_ok=True)
     set_seed(cfg.seed)
     lgb_tr = LGBMTrainer(params=lgb_params, features=pp.feature_cols, model_dir=cfg.model_dir, device=device)
     lgb_tr.train(lgbm_train, cfg)

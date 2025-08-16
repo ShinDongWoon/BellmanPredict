@@ -13,9 +13,8 @@ TEST_GLOB = str((TEST_DIR / "TEST_*.csv").resolve())
 # EVAL_PATH  = str((DATA_DIR / "TEST_00.csv").resolve())
 SAMPLE_SUB_PATH = str((DATA_DIR / "sample_submission.csv").resolve())
 
-# 산출물 저장 루트(자동 생성)
+# 산출물 저장 루트
 ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
-ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # 모델/피처 산출물 경로
 MODEL_DIR       = str((ARTIFACTS_DIR / "models").resolve())

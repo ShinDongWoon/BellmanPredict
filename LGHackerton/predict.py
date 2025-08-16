@@ -22,6 +22,7 @@ from LGHackerton.config.default import (
     PATCH_PARAMS,
     TRAIN_CFG,
     ENSEMBLE_CFG,
+    ARTIFACTS_DIR,
 )
 from LGHackerton.utils.seed import set_seed
 
@@ -51,12 +52,14 @@ def convert_to_submission(pred_df: pd.DataFrame, sample_path: str) -> pd.DataFra
     return out_df
 
 def main():
+    os.makedirs(ARTIFACTS_DIR, exist_ok=True)
     device = select_device()
 
     pp = Preprocessor(); pp.load(ARTIFACTS_PATH)
 
     from LGHackerton.models.base_trainer import TrainConfig
     cfg = TrainConfig(**TRAIN_CFG)
+    os.makedirs(cfg.model_dir, exist_ok=True)
     set_seed(cfg.seed)
 
     lgb = LGBMTrainer(params=LGBMParams(**LGBM_PARAMS), features=pp.feature_cols, model_dir=cfg.model_dir, device=device)
