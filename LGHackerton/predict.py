@@ -1,7 +1,6 @@
 
 from __future__ import annotations
 import os
-import random
 import glob
 import re
 import numpy as np
@@ -22,20 +21,7 @@ from LGHackerton.config.default import (
     TRAIN_CFG,
     ENSEMBLE_CFG,
 )
-
-
-def set_seed(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    try:
-        import torch
-
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-    except Exception:
-        pass
+from LGHackerton.utils.seed import set_seed
 
 def _read_table(path: str) -> pd.DataFrame:
     if path.lower().endswith(".csv"):
