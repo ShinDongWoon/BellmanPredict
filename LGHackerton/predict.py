@@ -1,20 +1,15 @@
 
 from __future__ import annotations
-import os, sys
+import os
 import random
 import numpy as np
 import pandas as pd
 
-sys.path.append("/mnt/data")
-try:
-    from preprocess_pipeline_v1_1 import Preprocessor, L, H
-except Exception as e:
-    raise RuntimeError("preprocess_pipeline_v1_1.py를 /mnt/data에 두세요.") from e
-
-from models.lgbm_trainer import LGBMTrainer, LGBMParams
-from models.patchtst_trainer import PatchTSTTrainer, PatchTSTParams, TORCH_OK
-from utils.ensemble_manager import EnsembleManager
-from config.default import (
+from .preprocess import Preprocessor, L, H
+from .models.lgbm_trainer import LGBMTrainer, LGBMParams
+from .models.patchtst_trainer import PatchTSTTrainer, PatchTSTParams, TORCH_OK
+from .utils.ensemble_manager import EnsembleManager
+from .config.default import (
     EVAL_PATH,
     ARTIFACTS_PATH,
     LGBM_EVAL_OUT,
@@ -54,7 +49,7 @@ def main():
     lgbm_eval = pp.build_lgbm_eval(df_eval_full)
     X_eval, sids, _ = pp.build_patch_eval(df_eval_full)
 
-    from models.base_trainer import TrainConfig
+    from .models.base_trainer import TrainConfig
     cfg = TrainConfig(**TRAIN_CFG)
     set_seed(cfg.seed)
     lgb = LGBMTrainer(params=LGBMParams(**LGBM_PARAMS), features=pp.feature_cols, model_dir=cfg.model_dir)
