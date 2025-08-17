@@ -35,7 +35,7 @@ def _read_table(path: str) -> pd.DataFrame:
 
 def convert_to_submission(pred_df: pd.DataFrame, sample_path: str) -> pd.DataFrame:
     sample_df = _read_table(sample_path)
-    sample_df.columns = sample_df.columns.str.strip().str.lstrip("\ufeff")
+    sample_df.columns = sample_df.columns.str.strip()
 
     pred_df = pred_df.copy()
     pred_df["series_id"] = pred_df["series_id"].str.replace("::", "_", n=1)
