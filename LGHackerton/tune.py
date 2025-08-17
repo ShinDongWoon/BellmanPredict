@@ -7,6 +7,7 @@ model on the project's training data using the weighted sMAPE metric.
 
 from __future__ import annotations
 
+import argparse
 import gc
 import json
 from pathlib import Path
@@ -24,6 +25,7 @@ except Exception:  # pragma: no cover - torch optional
 
 from LGHackerton.config.default import OPTUNA_DIR, TRAIN_PATH, TRAIN_CFG
 from LGHackerton.preprocess import Preprocessor
+from LGHackerton.models.base_trainer import TrainConfig
 from LGHackerton.utils.metrics import weighted_smape_np
 from LGHackerton.utils.seed import set_seed
 
@@ -38,7 +40,7 @@ def objective(trial: optuna.Trial) -> float:
     return x * x
 
 
-def main(n_trials: int = 20) -> None:
+def demo_study(n_trials: int = 20) -> None:
     """Run a sample Optuna study and persist the results."""
 
     OPTUNA_DIR.mkdir(parents=True, exist_ok=True)
@@ -259,6 +261,33 @@ def tune_patchtst(X, y, series_ids, label_dates, cfg):
         json.dump(study.best_params, f, ensure_ascii=False, indent=2)
 
     return study
+
+
+def main() -> None:  # pragma: no cover - CLI entry point
+    """Entry point for command-line usage."""
+
+    parser = argparse.ArgumentParser(description="Hyperparameter tuning utilities")
+    parser.add_argument("--lgbm", action="store_true", help="tune LightGBM hyperparameters")
+    parser.add_argument("--patch", action="store_true", help="tune PatchTST hyperparameters")
+    parser.add_argument("--trials", type=int, default=20, help="number of Optuna trials")
+    parser.add_argument("--timeout", type=int, default=None, help="time limit for tuning in seconds")
+    args = parser.parse_args()
+
+    if args.lgbm:
+        tune_lgbm(args.trials, args.timeout)
+
+    if args.patch:
+        df_raw = pd.read_csv(TRAIN_PATH)
+        pp = Preprocessor(show_progress=False)
+        df_full = pp.fit_transform_train(df_raw)
+        X, y, series_ids, label_dates = pp.build_patch_train(df_full)
+        cfg = TrainConfig(**TRAIN_CFG)
+        cfg.n_trials = args.trials
+        cfg.timeout = args.timeout
+        tune_patchtst(X, y, series_ids, label_dates, cfg)
+
+    if not args.lgbm and not args.patch:
+        demo_study(args.trials)
 
 
 if __name__ == "__main__":  # pragma: no cover - script entry point
