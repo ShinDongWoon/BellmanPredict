@@ -81,16 +81,25 @@ _FEATURE_IMPORTANCE: List[dict[str, Any]] = []
 TRIAL_LOG_PATH = OPTUNA_DIR / "lgbm_trials.json"
 
 
-def _prepare_lgbm_train() -> Tuple[pd.DataFrame, List[str]]:
-    """Load and preprocess training data for LightGBM once per process."""
+def _prepare_lgbm_train(
+    df: pd.DataFrame | None = None, feature_cols: List[str] | None = None
+) -> Tuple[pd.DataFrame, List[str]]:
+    """Register LightGBM training frame and feature columns.
+
+    The training dataframe and list of feature columns may be provided by the
+    caller (e.g. :func:`tune_lgbm`).  They are cached in module-level globals so
+    subsequent calls reuse the same objects without re-loading data.
+    """
 
     global _LGBM_TRAIN, _FEATURE_COLS
+
+    if df is not None and feature_cols is not None:
+        _LGBM_TRAIN = df
+        _FEATURE_COLS = feature_cols
+
     if _LGBM_TRAIN is None or _FEATURE_COLS is None:
-        df_raw = pd.read_csv(TRAIN_PATH)
-        pp = Preprocessor(show_progress=False)
-        df_full = pp.fit_transform_train(df_raw)
-        _LGBM_TRAIN = pp.build_lgbm_train(df_full)
-        _FEATURE_COLS = pp.feature_cols
+        raise RuntimeError("Training data has not been provided")
+
     return _LGBM_TRAIN, _FEATURE_COLS
 
 
@@ -197,8 +206,24 @@ def tune_lgbm(
     n_trials: int,
     timeout: int | None = None,
     search: str = "bayes",
+    train_df: pd.DataFrame | None = None,
+    feature_cols: List[str] | None = None,
 ) -> optuna.Study:
-    """Run an Optuna study to tune LightGBM hyperparameters."""
+    """Run an Optuna study to tune LightGBM hyperparameters.
+
+    Parameters
+    ----------
+    n_trials : int
+        Number of Optuna trials to run.
+    timeout : int | None, optional
+        Time limit for the study in seconds, by default ``None``.
+    search : str, optional
+        Search strategy ("bayes" or "random"), by default ``"bayes"``.
+    train_df : pd.DataFrame | None, optional
+        Preconstructed LightGBM training dataframe.
+    feature_cols : List[str] | None, optional
+        List of feature column names corresponding to ``train_df``.
+    """
 
     if TRIAL_LOG_PATH.exists():
         try:
@@ -206,7 +231,7 @@ def tune_lgbm(
         except Exception:
             pass
 
-    _prepare_lgbm_train()  # ensure data prepared once
+    _prepare_lgbm_train(train_df, feature_cols)  # ensure data prepared once
 
     seed = TRAIN_CFG.get("seed", 42)
     if search == "random":

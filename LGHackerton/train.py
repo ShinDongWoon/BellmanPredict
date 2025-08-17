@@ -96,7 +96,12 @@ def main(show_progress: bool | None = None):
     if not args.skip_tune:
         study_file = Path(OPTUNA_DIR) / "lgbm_study.json"
         if args.force_tune or not study_file.exists():
-            tune_lgbm(args.trials, args.timeout)
+            tune_lgbm(
+                args.trials,
+                args.timeout,
+                train_df=lgbm_train,
+                feature_cols=pp.feature_cols,
+            )
     lgbm_params_dict = load_best_lgbm_params()
     lgb_params = LGBMParams(**lgbm_params_dict)
 
