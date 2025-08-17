@@ -1,0 +1,6 @@
+seed: 42
+val_policy: rocv
+rocv_n_folds: 3
+rocv_stride_days: 7
+rocv_val_span_days: 7
+purge_days: 28
