@@ -379,63 +379,71 @@ def run_patchtst_grid_search(cfg_path: str | Path) -> None:
 
     device = "cuda" if torch and torch.cuda.is_available() else "cpu"
     results: List[dict[str, Any]] = []
+    dataset_cache: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = {}
 
-    for inp, patch, lr, scaler in itertools.product(input_lens, patch_lens, lrs, scalers):
-        if inp % patch != 0:
-            continue
-        try:
-            set_seed(42)
-            pp.windowizer = SampleWindowizer(lookback=inp, horizon=H)
-            X, y, series_ids, label_dates = pp.build_patch_train(df_full)
-            params = PatchTSTParams(patch_len=patch, stride=patch, lr=lr, scaler=scaler)
-            trainer = PatchTSTTrainer(params=params, L=inp, H=H, model_dir=cfg.model_dir, device=device)
-            trainer.train(X, y, series_ids, label_dates, cfg)
-            oof = trainer.get_oof()
-            outlets = oof["series_id"].str.split("::").str[0].values
-            val_w = weighted_smape_np(
-                oof["y"].values,
-                oof["yhat"].values,
-                outlets,
-                priority_weight=getattr(cfg, "priority_weight", 1.0),
-            )
-            val_mae = float(np.mean(np.abs(oof["y"].values - oof["yhat"].values)))
-            results.append(
-                {
-                    "input_len": inp,
-                    "patch_len": patch,
-                    "lr": lr,
-                    "scaler": scaler,
-                    "val_wsmape": float(val_w),
-                    "val_mae": val_mae,
-                }
-            )
-            logger.info(
-                "inp=%s patch=%s lr=%s scaler=%s wSMAPE=%.4f MAE=%.4f",
-                inp,
-                patch,
-                lr,
-                scaler,
-                val_w,
-                val_mae,
-            )
-        except Exception as e:  # pragma: no cover - robustness
-            logger.exception(
-                "Grid combo failed for input_len=%s patch_len=%s lr=%s scaler=%s",
-                inp,
-                patch,
-                lr,
-                scaler,
-            )
-            results.append(
-                {
-                    "input_len": inp,
-                    "patch_len": patch,
-                    "lr": lr,
-                    "scaler": scaler,
-                    "error": str(e),
-                }
-            )
-            continue
+    # Prebuild datasets for each unique input length
+    for inp in input_lens:
+        set_seed(42)
+        pp.windowizer = SampleWindowizer(lookback=inp, horizon=H)
+        dataset_cache[inp] = pp.build_patch_train(df_full)
+
+    # Iterate over grid while reusing cached datasets
+    for inp in input_lens:
+        X, y, series_ids, label_dates = dataset_cache[inp]
+        for patch, lr, scaler in itertools.product(patch_lens, lrs, scalers):
+            if inp % patch != 0:
+                continue
+            try:
+                set_seed(42)
+                params = PatchTSTParams(patch_len=patch, stride=patch, lr=lr, scaler=scaler)
+                trainer = PatchTSTTrainer(params=params, L=inp, H=H, model_dir=cfg.model_dir, device=device)
+                trainer.train(X, y, series_ids, label_dates, cfg)
+                oof = trainer.get_oof()
+                outlets = oof["series_id"].str.split("::").str[0].values
+                val_w = weighted_smape_np(
+                    oof["y"].values,
+                    oof["yhat"].values,
+                    outlets,
+                    priority_weight=getattr(cfg, "priority_weight", 1.0),
+                )
+                val_mae = float(np.mean(np.abs(oof["y"].values - oof["yhat"].values)))
+                results.append(
+                    {
+                        "input_len": inp,
+                        "patch_len": patch,
+                        "lr": lr,
+                        "scaler": scaler,
+                        "val_wsmape": float(val_w),
+                        "val_mae": val_mae,
+                    }
+                )
+                logger.info(
+                    "inp=%s patch=%s lr=%s scaler=%s wSMAPE=%.4f MAE=%.4f",
+                    inp,
+                    patch,
+                    lr,
+                    scaler,
+                    val_w,
+                    val_mae,
+                )
+            except Exception as e:  # pragma: no cover - robustness
+                logger.exception(
+                    "Grid combo failed for input_len=%s patch_len=%s lr=%s scaler=%s",
+                    inp,
+                    patch,
+                    lr,
+                    scaler,
+                )
+                results.append(
+                    {
+                        "input_len": inp,
+                        "patch_len": patch,
+                        "lr": lr,
+                        "scaler": scaler,
+                        "error": str(e),
+                    }
+                )
+                continue
 
     os.makedirs("artifacts", exist_ok=True)
     pd.DataFrame(results).to_csv(Path("artifacts") / "patchtst_search.csv", index=False)
