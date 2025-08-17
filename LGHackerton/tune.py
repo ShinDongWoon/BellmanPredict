@@ -156,28 +156,42 @@ def objective_lgbm(trial: optuna.Trial) -> float:
             y_tr = dfh.loc[tr_mask, "y"].values.astype("float32")
             X_va = dfh.loc[va_mask, feat_cols].values.astype("float32")
             y_va = dfh.loc[va_mask, "y"].values.astype("float32")
+            outlets = dfh.loc[va_mask, "series_id"].str.split("::").str[0].values
 
             dtrain = lgb.Dataset(X_tr, label=y_tr)
             dvalid = lgb.Dataset(X_va, label=y_va)
+
+            fold_params = params.copy()
             callbacks = [lgb.log_evaluation(period=0)]
-            if "early_stopping_rounds" in params:
-                if str(params.get("metric", "")).lower() != "none":
-                    callbacks.append(
-                        lgb.early_stopping(
-                            stopping_rounds=params["early_stopping_rounds"],
-                            verbose=False,
-                        )
+            if "early_stopping_rounds" in fold_params:
+                callbacks.append(
+                    lgb.early_stopping(
+                        stopping_rounds=fold_params["early_stopping_rounds"],
+                        verbose=False,
                     )
-                params.pop("early_stopping_rounds")
+                )
+                fold_params.pop("early_stopping_rounds")
+
+            def wsmape_eval(preds: np.ndarray, dataset: lgb.Dataset) -> Tuple[str, float, bool]:
+                return (
+                    "wSMAPE",
+                    float(
+                        weighted_smape_np(
+                            dataset.get_label(), preds, outlets, priority_weight=priority_w
+                        )
+                    ),
+                    False,
+                )
+
             booster = lgb.train(
-                params=params,
+                params=fold_params,
                 train_set=dtrain,
                 valid_sets=[dvalid],
+                feval=wsmape_eval,
                 callbacks=callbacks,
             )
 
             preds = booster.predict(X_va, num_iteration=booster.best_iteration)
-            outlets = dfh.loc[va_mask, "series_id"].str.split("::").str[0].values
             score = weighted_smape_np(y_va, preds, outlets, priority_weight=priority_w)
             scores.append(score)
 
