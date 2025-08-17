@@ -137,11 +137,21 @@ def objective_lgbm(trial: optuna.Trial) -> float:
 
         dtrain = lgb.Dataset(X_tr, label=y_tr)
         dvalid = lgb.Dataset(X_va, label=y_va)
+        callbacks = [lgb.log_evaluation(period=0)]
+        if "early_stopping_rounds" in params:
+            if str(params.get("metric", "")).lower() != "none":
+                callbacks.append(
+                    lgb.early_stopping(
+                        stopping_rounds=params["early_stopping_rounds"],
+                        verbose=False,
+                    )
+                )
+            params.pop("early_stopping_rounds")
         booster = lgb.train(
             params=params,
             train_set=dtrain,
             valid_sets=[dvalid],
-            verbose_eval=False,
+            callbacks=callbacks,
         )
 
         preds = booster.predict(X_va, num_iteration=booster.best_iteration)
