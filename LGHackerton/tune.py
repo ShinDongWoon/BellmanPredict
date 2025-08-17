@@ -1,24 +1,38 @@
 """Hyperparameter tuning utilities using Optuna.
 
-This module provides a minimal example of running an Optuna study and
-storing its results under :data:`ARTIFACTS_DIR/"optuna"`.
+This module originally provided only a very small example of running an
+Optuna study.  It now also contains helper functions for tuning a LightGBM
+model on the project's training data using the weighted sMAPE metric.
 """
 
 from __future__ import annotations
 
+import gc
 import json
+from pathlib import Path
+from typing import Any, List, Tuple
+
+import numpy as np
 import optuna
+import pandas as pd
+import lightgbm as lgb
 
-from LGHackerton.config.default import OPTUNA_DIR
+try:  # torch is optional; used only for GPU cache clearing
+    import torch
+except Exception:  # pragma: no cover - torch optional
+    torch = None  # type: ignore
 
+from LGHackerton.config.default import OPTUNA_DIR, TRAIN_PATH, TRAIN_CFG
+from LGHackerton.preprocess import Preprocessor
+from LGHackerton.utils.metrics import weighted_smape_np
+from LGHackerton.utils.seed import set_seed
+
+# ---------------------------------------------------------------------------
+# simple demo objective (kept for backward compatibility)
+# ---------------------------------------------------------------------------
 
 def objective(trial: optuna.Trial) -> float:
-    """Simple objective function for demonstration purposes.
-
-    The function is intentionally lightweight so that it can be executed in
-    restricted environments. Replace this logic with model training and
-    evaluation to perform real hyperparameter optimisation.
-    """
+    """Simple objective function for demonstration purposes."""
 
     x = trial.suggest_float("x", -10.0, 10.0)
     return x * x
@@ -40,6 +54,134 @@ def main(n_trials: int = 20) -> None:
             indent=2,
         )
     print(f"Study results saved to {out_path}")
+
+
+# ---------------------------------------------------------------------------
+# LightGBM tuning utilities
+# ---------------------------------------------------------------------------
+
+_LGBM_TRAIN: pd.DataFrame | None = None
+_FEATURE_COLS: List[str] | None = None
+_TRIAL_LOG: List[dict[str, Any]] = []
+
+TRIAL_LOG_PATH = OPTUNA_DIR / "lgbm_trials.json"
+
+
+def _prepare_lgbm_train() -> Tuple[pd.DataFrame, List[str]]:
+    """Load and preprocess training data for LightGBM once per process."""
+
+    global _LGBM_TRAIN, _FEATURE_COLS
+    if _LGBM_TRAIN is None or _FEATURE_COLS is None:
+        df_raw = pd.read_csv(TRAIN_PATH)
+        pp = Preprocessor(show_progress=False)
+        df_full = pp.fit_transform_train(df_raw)
+        _LGBM_TRAIN = pp.build_lgbm_train(df_full)
+        _FEATURE_COLS = pp.feature_cols
+    return _LGBM_TRAIN, _FEATURE_COLS
+
+
+def _log_trial(record: dict[str, Any]) -> None:
+    """Append a trial record to the JSON log under :data:`OPTUNA_DIR`."""
+
+    _TRIAL_LOG.append(record)
+    TRIAL_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with TRIAL_LOG_PATH.open("w", encoding="utf-8") as f:
+        json.dump(_TRIAL_LOG, f, ensure_ascii=False, indent=2)
+
+
+def objective_lgbm(trial: optuna.Trial) -> float:
+    """Train LightGBM with trial params and evaluate wSMAPE."""
+
+    set_seed(TRAIN_CFG.get("seed", 42))
+    df, feat_cols = _prepare_lgbm_train()
+
+    params = {
+        "objective": "tweedie",
+        "metric": "None",
+        "verbosity": -1,
+        "num_leaves": trial.suggest_int("num_leaves", 31, 255),
+        "max_depth": trial.suggest_int("max_depth", -1, 16),
+        "min_data_in_leaf": trial.suggest_int("min_data_in_leaf", 10, 200),
+        "learning_rate": trial.suggest_float("learning_rate", 1e-3, 0.3, log=True),
+        "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+        "reg_alpha": trial.suggest_float("reg_alpha", 1e-8, 10.0, log=True),
+        "reg_lambda": trial.suggest_float("reg_lambda", 1e-8, 10.0, log=True),
+        "n_estimators": 200,
+        "early_stopping_rounds": 50,
+    }
+    params["device_type"] = "gpu" if torch and torch.cuda.is_available() else "cpu"
+
+    scores: List[float] = []
+    priority_w = TRAIN_CFG.get("priority_weight", 1.0)
+
+    for h in range(1, 8):
+        dfh = df[df["h"] == h]
+        if dfh.empty:
+            continue
+        dfh = dfh.sort_values("date")
+        dates = dfh["date"].sort_values().unique()
+        if len(dates) < 2:
+            continue
+        split = int(len(dates) * 0.8)
+        tr_dates, va_dates = dates[:split], dates[split:]
+        tr_mask = dfh["date"].isin(tr_dates)
+        va_mask = dfh["date"].isin(va_dates)
+
+        X_tr = dfh.loc[tr_mask, feat_cols].values.astype("float32")
+        y_tr = dfh.loc[tr_mask, "y"].values.astype("float32")
+        X_va = dfh.loc[va_mask, feat_cols].values.astype("float32")
+        y_va = dfh.loc[va_mask, "y"].values.astype("float32")
+
+        dtrain = lgb.Dataset(X_tr, label=y_tr)
+        dvalid = lgb.Dataset(X_va, label=y_va)
+        booster = lgb.train(
+            params=params,
+            train_set=dtrain,
+            valid_sets=[dvalid],
+            verbose_eval=False,
+        )
+
+        preds = booster.predict(X_va, num_iteration=booster.best_iteration)
+        outlets = dfh.loc[va_mask, "series_id"].str.split("::").str[0].values
+        score = weighted_smape_np(y_va, preds, outlets, priority_weight=priority_w)
+        scores.append(score)
+
+        del booster, dtrain, dvalid
+
+    final_score = float(np.mean(scores)) if scores else float("inf")
+    _log_trial({"number": trial.number, "value": final_score, "params": trial.params})
+
+    gc.collect()
+    if torch and torch.cuda.is_available():  # pragma: no cover - GPU only
+        torch.cuda.empty_cache()
+
+    return final_score
+
+
+def tune_lgbm(n_trials: int, timeout: int | None = None) -> optuna.Study:
+    """Run an Optuna study to tune LightGBM hyperparameters."""
+
+    if TRIAL_LOG_PATH.exists():
+        try:
+            _TRIAL_LOG.extend(json.load(TRIAL_LOG_PATH.open()))
+        except Exception:
+            pass
+
+    _prepare_lgbm_train()  # ensure data prepared once
+
+    study = optuna.create_study(direction="minimize")
+    study.optimize(objective_lgbm, n_trials=n_trials, timeout=timeout)
+
+    out_path = OPTUNA_DIR / "lgbm_study.json"
+    with out_path.open("w", encoding="utf-8") as f:
+        json.dump(
+            [{"value": t.value, "params": t.params} for t in study.trials],
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
+    return study
 
 
 if __name__ == "__main__":  # pragma: no cover - script entry point
