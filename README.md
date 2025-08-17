@@ -15,3 +15,17 @@ Run a grid search over PatchTST settings:
 ```bash
 python LGHackerton/tune.py --task patchtst_grid --config configs/patchtst.yaml
 ```
+
+## PatchTST Hyperparameter Selection
+
+`train.py` determines PatchTST settings using the following order:
+
+1. If `artifacts/patchtst_search.csv` exists (created by the grid-search task),
+   the combination with the lowest `val_wsmape` is chosen. The associated
+   `input_len` is applied to window generation and to the model.
+2. Otherwise, Optuna results from `artifacts/optuna/patchtst_best.json` are
+   used when available.
+3. If neither artifact is present, default parameters from `PATCH_PARAMS` are
+   used.
+
+This avoids confusion when both grid-search and Optuna artifacts may exist.
