@@ -17,6 +17,10 @@ SAMPLE_SUB_PATH = str((DATA_DIR / "sample_submission.csv").resolve())
 ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 
+# Optuna 결과 저장 디렉터리
+OPTUNA_DIR = ARTIFACTS_DIR / "optuna"
+OPTUNA_DIR.mkdir(parents=True, exist_ok=True)
+
 # 모델/피처 산출물 경로
 MODEL_DIR       = str((ARTIFACTS_DIR / "models").resolve())
 ARTIFACTS_PATH  = str((ARTIFACTS_DIR / "preprocess_artifacts.pkl").resolve())
