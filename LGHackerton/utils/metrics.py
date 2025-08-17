@@ -54,6 +54,19 @@ def lgbm_weighted_smape(preds, dataset, use_asinh_target: bool = False):
     return ("wSMAPE", val, False)
 
 
+def compute_oof_metrics(oof_df: pd.DataFrame) -> dict[str, float]:
+    """Compute wSMAPE and MAE for an OOF dataframe."""
+    if oof_df is None or oof_df.empty:
+        return {"wSMAPE": float("nan"), "MAE": float("nan")}
+    y = oof_df["y"].to_numpy(dtype=float)
+    yhat = oof_df["yhat"].to_numpy(dtype=float)
+    outlets = oof_df["series_id"].astype(str).str.split("::").str[0].tolist()
+    wsmape = weighted_smape_np(y, yhat, outlets)
+    mae = float(np.mean(np.abs(y - yhat))) if len(y) > 0 else float("nan")
+    return {"wSMAPE": wsmape, "MAE": mae}
+
+
+
 # ---------------------------------------------------------------------------
 # Baseline forecasting utilities
 # ---------------------------------------------------------------------------

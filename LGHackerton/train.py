@@ -20,6 +20,7 @@ from LGHackerton.utils.diagnostics import (
     white_test,
     plot_residuals,
 )
+from LGHackerton.utils.metrics import compute_oof_metrics
 from LGHackerton.config.default import (
     TRAIN_PATH,
     ARTIFACTS_PATH,
@@ -108,6 +109,13 @@ def load_best_patch_params() -> tuple[dict, int | None]:
         return PATCH_PARAMS, None
 
 
+def report_oof_metrics(oof_df, model_name: str) -> None:
+    """Compute and log OOF metrics for a model."""
+    metrics = compute_oof_metrics(oof_df)
+    for name, value in metrics.items():
+        logging.info("%s %s: %s", model_name, name, value)
+
+
 def main(show_progress: bool | None = None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--progress", dest="show_progress", action="store_true", help="show preprocessing progress")
@@ -157,6 +165,7 @@ def main(show_progress: bool | None = None):
     lgb_tr.train(lgbm_train, cfg)
     oof_lgbm = lgb_tr.get_oof()
     oof_lgbm.to_csv(OOF_LGBM_OUT, index=False)
+    report_oof_metrics(oof_lgbm, "LGBM")
 
     # diagnostics for LGBM
     try:
@@ -190,6 +199,7 @@ def main(show_progress: bool | None = None):
         pt_tr.train(X_train, y_train, series_ids, label_dates, cfg)
         oof_patch = pt_tr.get_oof()
         oof_patch.to_csv(OOF_PATCH_OUT, index=False)
+        report_oof_metrics(oof_patch, "PatchTST")
 
         # diagnostics for PatchTST
         try:
