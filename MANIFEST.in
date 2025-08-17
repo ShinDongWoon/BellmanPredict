@@ -1,0 +1,4 @@
+include README.md
+recursive-include LGHackerton/data *.csv
+recursive-include LGHackerton/config *.py
+recursive-include LGHackerton/artifacts *
