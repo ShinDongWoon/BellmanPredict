@@ -66,8 +66,8 @@ def main(show_progress: bool | None = None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--progress", dest="show_progress", action="store_true", help="show preprocessing progress")
     parser.add_argument("--no-progress", dest="show_progress", action="store_false", help="hide preprocessing progress")
-    parser.add_argument("--tune-lgbm", action="store_true", help="tune LightGBM hyperparameters")
-    parser.add_argument("--tune-patch", action="store_true", help="tune PatchTST hyperparameters")
+    parser.add_argument("--skip-tune", action="store_true", help="skip hyperparameter tuning")
+    parser.add_argument("--force-tune", action="store_true", help="re-run tuning even if artifacts exist")
     parser.add_argument("--trials", type=int, default=20, help="number of Optuna trials")
     parser.add_argument("--timeout", type=int, default=None, help="time limit for tuning (seconds)")
     parser.set_defaults(show_progress=SHOW_PROGRESS)
@@ -86,8 +86,10 @@ def main(show_progress: bool | None = None):
     lgbm_train = pp.build_lgbm_train(df_full)
     X_train, y_train, series_ids, label_dates = pp.build_patch_train(df_full)
 
-    if args.tune_lgbm:
-        tune_lgbm(args.trials, args.timeout)
+    if not args.skip_tune:
+        study_file = Path(OPTUNA_DIR) / "lgbm_study.json"
+        if args.force_tune or not study_file.exists():
+            tune_lgbm(args.trials, args.timeout)
     lgbm_params_dict = load_best_lgbm_params()
     lgb_params = LGBMParams(**lgbm_params_dict)
 
@@ -99,16 +101,17 @@ def main(show_progress: bool | None = None):
     lgb_tr.train(lgbm_train, cfg)
     lgb_tr.get_oof().to_csv(OOF_LGBM_OUT, index=False)
 
-    if TORCH_OK:
-        if args.tune_patch:
+    if TORCH_OK and not args.skip_tune:
+        patch_file = Path(OPTUNA_DIR) / "patchtst_best.json"
+        if args.force_tune or not patch_file.exists():
             tune_patchtst(X_train, y_train, series_ids, label_dates, cfg)
+
+    if TORCH_OK:
         patch_params_dict = load_best_patch_params()
         patch_params = PatchTSTParams(**patch_params_dict)
         pt_tr = PatchTSTTrainer(params=patch_params, L=L, H=H, model_dir=cfg.model_dir, device=device)
         pt_tr.train(X_train, y_train, series_ids, label_dates, cfg)
         pt_tr.get_oof().to_csv(OOF_PATCH_OUT, index=False)
-    elif args.tune_patch:
-        raise RuntimeError("PyTorch not available; cannot tune PatchTST")
 
 if __name__ == "__main__":
     main()
