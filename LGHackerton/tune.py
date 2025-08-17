@@ -195,10 +195,17 @@ def objective_lgbm(trial: optuna.Trial) -> float:
             score = weighted_smape_np(y_va, preds, outlets, priority_weight=priority_w)
             scores.append(score)
 
-            # record feature importance
+            # record feature importance per trial and fold
             fi = booster.feature_importance(importance_type="gain")
             for feat, imp in zip(feat_cols, fi):
-                _FEATURE_IMPORTANCE.append({"feature": feat, "fold": h, "importance": float(imp)})
+                _FEATURE_IMPORTANCE.append(
+                    {
+                        "feature": feat,
+                        "fold": h,
+                        "importance": float(imp),
+                        "trial": trial.number,
+                    }
+                )
 
             del booster, dtrain, dvalid
         except Exception as e:  # pragma: no cover - robustness
@@ -239,6 +246,8 @@ def tune_lgbm(
         List of feature column names corresponding to ``train_df``.
     """
 
+    _FEATURE_IMPORTANCE.clear()
+
     if TRIAL_LOG_PATH.exists():
         try:
             _TRIAL_LOG.extend(json.load(TRIAL_LOG_PATH.open()))
@@ -270,9 +279,13 @@ def tune_lgbm(
 
     if _FEATURE_IMPORTANCE:
         fi_df = pd.DataFrame(_FEATURE_IMPORTANCE)
-        fi_agg = fi_df.groupby(["feature", "fold"], as_index=False)["importance"].mean()
-        os.makedirs("artifacts", exist_ok=True)
-        fi_agg.to_csv(Path("artifacts") / "lgbm_feature_importance.csv", index=False)
+        best_trial_num = study.best_trial.number
+        fi_df = fi_df[fi_df["trial"] == best_trial_num]
+        if not fi_df.empty:
+            fi_agg = fi_df.groupby(["feature", "fold"], as_index=False)["importance"].mean()
+            os.makedirs("artifacts", exist_ok=True)
+            fi_agg.to_csv(Path("artifacts") / "lgbm_feature_importance.csv", index=False)
+    _FEATURE_IMPORTANCE.clear()
 
     return study
 
