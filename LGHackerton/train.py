@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import json
+import logging
 from pathlib import Path
 import pandas as pd
 
@@ -36,6 +37,31 @@ def _read_table(path: str) -> pd.DataFrame:
     raise ValueError("Unsupported file type. Use .csv or .xlsx")
 
 
+def load_best_lgbm_params() -> dict:
+    """Load best LightGBM params from Optuna study if available."""
+    study_path = Path(OPTUNA_DIR) / "lgbm_study.json"
+    try:
+        with study_path.open("r", encoding="utf-8") as f:
+            trials = json.load(f)
+        best = min(trials, key=lambda t: t["value"])
+        return {**LGBM_PARAMS, **best["params"]}
+    except Exception as e:  # pragma: no cover - best effort
+        logging.warning("Failed to load LGBM params from %s: %s", study_path, e)
+        return LGBM_PARAMS
+
+
+def load_best_patch_params() -> dict:
+    """Load best PatchTST params from Optuna results if available."""
+    best_path = Path(OPTUNA_DIR) / "patchtst_best.json"
+    try:
+        with best_path.open("r", encoding="utf-8") as f:
+            patch_best = json.load(f)
+        return {**PATCH_PARAMS, **patch_best}
+    except Exception as e:  # pragma: no cover - best effort
+        logging.warning("Failed to load PatchTST params from %s: %s", best_path, e)
+        return PATCH_PARAMS
+
+
 def main(show_progress: bool | None = None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--progress", dest="show_progress", action="store_true", help="show preprocessing progress")
@@ -62,13 +88,7 @@ def main(show_progress: bool | None = None):
 
     if args.tune_lgbm:
         tune_lgbm(args.trials, args.timeout)
-        study_path = Path(OPTUNA_DIR) / "lgbm_study.json"
-        with study_path.open("r", encoding="utf-8") as f:
-            trials = json.load(f)
-        best = min(trials, key=lambda t: t["value"])
-        lgbm_params_dict = {**LGBM_PARAMS, **best["params"]}
-    else:
-        lgbm_params_dict = LGBM_PARAMS
+    lgbm_params_dict = load_best_lgbm_params()
     lgb_params = LGBMParams(**lgbm_params_dict)
 
     cfg = TrainConfig(**TRAIN_CFG)
@@ -82,12 +102,7 @@ def main(show_progress: bool | None = None):
     if TORCH_OK:
         if args.tune_patch:
             tune_patchtst(X_train, y_train, series_ids, label_dates, cfg)
-            best_path = Path(OPTUNA_DIR) / "patchtst_best.json"
-            with best_path.open("r", encoding="utf-8") as f:
-                patch_best = json.load(f)
-            patch_params_dict = {**PATCH_PARAMS, **patch_best}
-        else:
-            patch_params_dict = PATCH_PARAMS
+        patch_params_dict = load_best_patch_params()
         patch_params = PatchTSTParams(**patch_params_dict)
         pt_tr = PatchTSTTrainer(params=patch_params, L=L, H=H, model_dir=cfg.model_dir, device=device)
         pt_tr.train(X_train, y_train, series_ids, label_dates, cfg)
