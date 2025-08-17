@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from LGHackerton.preprocess import Preprocessor, DATE_COL, SERIES_COL, SALES_COL, L, H
+from LGHackerton.preprocess.preprocess_pipeline_v1_1 import SampleWindowizer
 from LGHackerton.models.base_trainer import TrainConfig
 from LGHackerton.models.lgbm_trainer import LGBMParams, LGBMTrainer
 from LGHackerton.models.patchtst_trainer import PatchTSTParams, PatchTSTTrainer, TORCH_OK
@@ -57,16 +58,54 @@ def load_best_lgbm_params() -> dict:
         return LGBM_PARAMS
 
 
-def load_best_patch_params() -> dict:
-    """Load best PatchTST params from Optuna results if available."""
+def load_best_patch_params() -> tuple[dict, int | None]:
+    """
+    Determine PatchTST hyperparameters.
+
+    Preference order:
+    1. Grid search results saved in ``artifacts/patchtst_search.csv``. The
+       combination with the lowest ``val_wsmape`` is selected and its
+       ``input_len`` is returned separately to adjust window sizing.
+    2. Optuna best parameters stored in ``OPTUNA_DIR/patchtst_best.json``.
+    3. Default ``PATCH_PARAMS`` when no artifacts are available.
+
+    Returns
+    -------
+    params : dict
+        Parameters for :class:`PatchTSTParams`.
+    input_len : int | None
+        Lookback length if determined from grid search, otherwise ``None``.
+    """
+
+    # 1) Grid search CSV
+    search_path = Path("artifacts") / "patchtst_search.csv"
+    if search_path.exists():
+        try:
+            df = pd.read_csv(search_path)
+            if "val_wsmape" in df.columns:
+                df = df[df["val_wsmape"].notna()]
+                if not df.empty:
+                    row = df.loc[df["val_wsmape"].idxmin()]
+                    params = {
+                        **PATCH_PARAMS,
+                        "patch_len": int(row["patch_len"]),
+                        "stride": int(row["patch_len"]),
+                        "lr": float(row["lr"]),
+                        "scaler": row["scaler"],
+                    }
+                    return params, int(row["input_len"])
+        except Exception as e:  # pragma: no cover - best effort
+            logging.warning("Failed to parse %s: %s", search_path, e)
+
+    # 2) Optuna artifact
     best_path = Path(OPTUNA_DIR) / "patchtst_best.json"
     try:
         with best_path.open("r", encoding="utf-8") as f:
             patch_best = json.load(f)
-        return {**PATCH_PARAMS, **patch_best}
+        return {**PATCH_PARAMS, **patch_best}, None
     except Exception as e:  # pragma: no cover - best effort
         logging.warning("Failed to load PatchTST params from %s: %s", best_path, e)
-        return PATCH_PARAMS
+        return PATCH_PARAMS, None
 
 
 def main(show_progress: bool | None = None):
@@ -89,6 +128,11 @@ def main(show_progress: bool | None = None):
     pp = Preprocessor(show_progress=show_progress)
     df_full = pp.fit_transform_train(df_train_raw)
     pp.save(ARTIFACTS_PATH)
+
+    # Determine PatchTST parameters (may update input length)
+    patch_params_dict, patch_input_len = load_best_patch_params()
+    if patch_input_len is not None:
+        pp.windowizer = SampleWindowizer(lookback=patch_input_len, horizon=H)
 
     lgbm_train = pp.build_lgbm_train(df_full)
     X_train, y_train, series_ids, label_dates = pp.build_patch_train(df_full)
@@ -133,15 +177,16 @@ def main(show_progress: bool | None = None):
     except Exception as e:  # pragma: no cover - best effort
         logging.warning("LGBM diagnostics failed: %s", e)
 
-    if TORCH_OK and not args.skip_tune:
+    if TORCH_OK and not args.skip_tune and patch_input_len is None:
         patch_file = Path(OPTUNA_DIR) / "patchtst_best.json"
         if args.force_tune or not patch_file.exists():
             tune_patchtst(X_train, y_train, series_ids, label_dates, cfg)
+        patch_params_dict, _ = load_best_patch_params()
 
     if TORCH_OK:
-        patch_params_dict = load_best_patch_params()
         patch_params = PatchTSTParams(**patch_params_dict)
-        pt_tr = PatchTSTTrainer(params=patch_params, L=L, H=H, model_dir=cfg.model_dir, device=device)
+        L_used = patch_input_len if patch_input_len is not None else L
+        pt_tr = PatchTSTTrainer(params=patch_params, L=L_used, H=H, model_dir=cfg.model_dir, device=device)
         pt_tr.train(X_train, y_train, series_ids, label_dates, cfg)
         oof_patch = pt_tr.get_oof()
         oof_patch.to_csv(OOF_PATCH_OUT, index=False)
