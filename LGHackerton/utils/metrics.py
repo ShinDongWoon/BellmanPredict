@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 import numpy as np
+import pandas as pd
 from typing import Iterable, Optional
 
 PRIORITY_OUTLETS = {"담하", "미라시아"}
@@ -51,3 +52,77 @@ def lgbm_weighted_smape(preds, dataset, use_asinh_target: bool = False):
     w = np.where(mask, w, 0.0)
     val = float(np.sum(sm * w) / np.sum(w)) if np.sum(w) > 0 else 0.0
     return ("wSMAPE", val, False)
+
+
+# ---------------------------------------------------------------------------
+# Baseline forecasting utilities
+# ---------------------------------------------------------------------------
+
+def naive_forecast(series: Iterable[float] | pd.Series,
+                   horizon: int,
+                   frequency: int | str | None = None) -> np.ndarray:
+    """Forecast by repeating the last observed value."""
+    arr = pd.Series(series).astype(float).dropna().values
+    if len(arr) == 0:
+        return np.zeros(horizon, dtype=float)
+    return np.repeat(arr[-1], horizon)
+
+
+def seasonal_naive_forecast(series: Iterable[float] | pd.Series,
+                            horizon: int,
+                            frequency: int = 7) -> np.ndarray:
+    """Repeat the observations from one seasonal cycle ago."""
+    arr = pd.Series(series).astype(float).dropna().values
+    if len(arr) == 0:
+        return np.zeros(horizon, dtype=float)
+    if len(arr) < frequency or frequency <= 0:
+        return naive_forecast(arr, horizon)
+    last_cycle = arr[-frequency:]
+    reps = int(np.ceil(horizon / frequency))
+    return np.tile(last_cycle, reps)[:horizon]
+
+
+def ets_forecast(series: Iterable[float] | pd.Series,
+                 horizon: int,
+                 frequency: int | None = None) -> np.ndarray:
+    """Simple ETS (Exponential Smoothing) forecast using statsmodels."""
+    from statsmodels.tsa.holtwinters import ExponentialSmoothing
+
+    arr = pd.Series(series).astype(float).dropna().values
+    if len(arr) == 0:
+        return np.zeros(horizon, dtype=float)
+    seasonal = None
+    seasonal_periods = None
+    if frequency and frequency > 1:
+        seasonal = "add"
+        seasonal_periods = int(frequency)
+    model = ExponentialSmoothing(arr,
+                                 trend=None,
+                                 seasonal=seasonal,
+                                 seasonal_periods=seasonal_periods,
+                                 initialization_method="estimated")
+    fit = model.fit(optimized=True)
+    return fit.forecast(horizon)
+
+
+def prophet_forecast(series: pd.Series,
+                     horizon: int,
+                     frequency: str = "D") -> np.ndarray:
+    """Forecast using Prophet with holidays disabled."""
+    from prophet import Prophet
+
+    if not isinstance(series, pd.Series):
+        series = pd.Series(series)
+    ds = series.index
+    if not isinstance(ds, pd.DatetimeIndex):
+        # create a dummy daily index starting today
+        ds = pd.date_range(pd.Timestamp.today(), periods=len(series), freq=frequency)
+    df = pd.DataFrame({"ds": ds, "y": series.astype(float).values})
+    m = Prophet(holidays=None,
+                yearly_seasonality=False,
+                weekly_seasonality=True,
+                daily_seasonality=False)
+    m.fit(df, iter=1000)
+    future = m.make_future_dataframe(periods=horizon, freq=frequency, include_history=False)
+    fcst = m.predict(future)
+    return fcst["yhat"].values
