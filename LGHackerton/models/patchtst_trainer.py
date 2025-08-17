@@ -31,6 +31,7 @@ class PatchTSTParams:
     batch_size:int=256
     max_epochs:int=200
     patience:int=20
+    scaler:str="per_series"
     # validation settings (mirrors TrainConfig)
     val_policy:str="ratio"
     val_ratio:float=0.2
@@ -42,20 +43,27 @@ class PatchTSTParams:
     min_val_samples:int=28
 
 class _SeriesDataset(Dataset):
-    def __init__(self, X: np.ndarray, y: np.ndarray, series_ids: Optional[Iterable[int]] = None):
+    def __init__(self, X: np.ndarray, y: np.ndarray, series_ids: Optional[Iterable[int]] = None, scaler: str = "per_series"):
         self.X = X.astype(np.float32)
         self.y = y.astype(np.float32)
         if series_ids is None:
             series_ids = [0 for _ in range(len(X))]
         self.sids = np.array(list(series_ids), dtype=np.int64)
+        self.scaler = scaler
+
     def __len__(self):
         return self.X.shape[0]
+
     def __getitem__(self, idx):
         x = self.X[idx]
         mu = x.mean(); std = x.std()
-        if std == 0: std = 1.0
+        if std == 0:
+            std = 1.0
         x = (x - mu) / std
-        return x, self.y[idx], int(self.sids[idx])
+        y = self.y[idx]
+        if self.scaler == "revin":
+            y = (y - mu) / std
+        return x, y, int(self.sids[idx]), np.float32(mu), np.float32(std)
 
 if TORCH_OK:
     class PatchTSTBlock(nn.Module):
@@ -217,9 +225,13 @@ class PatchTSTTrainer(BaseModel):
         assert folds, "No valid folds generated"
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.models = []
-        for i,(tr_mask,va_mask) in enumerate(folds):
-            tr_ds = _SeriesDataset(X_train[tr_mask], y_train[tr_mask], series_idx[tr_mask])
-            va_ds = _SeriesDataset(X_train[va_mask], y_train[va_mask], series_idx[va_mask])
+        for i, (tr_mask, va_mask) in enumerate(folds):
+            tr_ds = _SeriesDataset(
+                X_train[tr_mask], y_train[tr_mask], series_idx[tr_mask], scaler=self.params.scaler
+            )
+            va_ds = _SeriesDataset(
+                X_train[va_mask], y_train[va_mask], series_idx[va_mask], scaler=self.params.scaler
+            )
             pin = self.device != "cpu"
             tr_loader = DataLoader(tr_ds, batch_size=self.params.batch_size, shuffle=True, pin_memory=pin)
             va_loader = DataLoader(va_ds, batch_size=self.params.batch_size, shuffle=False, pin_memory=pin)
@@ -231,28 +243,45 @@ class PatchTSTTrainer(BaseModel):
             best=float("inf"); best_state=None; bad=0
             for ep in range(self.params.max_epochs):
                 net.train()
-                for xb,yb,sb in tr_loader:
+                for xb, yb, sb, mu, std in tr_loader:
                     xb = xb.to(self.device, non_blocking=pin)
                     yb = yb.to(self.device, non_blocking=pin)
                     sb = sb.to(self.device, non_blocking=pin)
-                    opt.zero_grad(); pred = net(xb, sb)
+                    mu = mu.to(self.device, non_blocking=pin)
+                    std = std.to(self.device, non_blocking=pin)
+                    opt.zero_grad()
+                    pred = net(xb, sb)
                     if cfg.use_weighted_loss:
                         outlets = [self.idx2id[int(i)].split("::")[0] for i in sb.cpu().tolist()]
-                        w = torch.tensor([cfg.priority_weight if o in PRIORITY_OUTLETS else 1.0 for o in outlets], device=self.device).view(-1,1)
+                        w = torch.tensor(
+                            [cfg.priority_weight if o in PRIORITY_OUTLETS else 1.0 for o in outlets],
+                            device=self.device,
+                        ).view(-1, 1)
                         loss = (torch.abs(pred - yb) * w).mean()
                     else:
                         loss = loss_fn(pred, yb)
-                    loss.backward(); opt.step()
-                net.eval(); P=[]; T=[]; S=[]
+                    loss.backward()
+                    opt.step()
+                net.eval()
+                P = []
+                T = []
+                S = []
                 with torch.no_grad():
-                    for xb,yb,sb in va_loader:
+                    for xb, yb, sb, mu, std in va_loader:
                         xb = xb.to(self.device, non_blocking=pin)
                         yb = yb.to(self.device, non_blocking=pin)
                         sb = sb.to(self.device, non_blocking=pin)
+                        mu = mu.to(self.device, non_blocking=pin)
+                        std = std.to(self.device, non_blocking=pin)
                         out = net(xb, sb)
-                        P.append(out.cpu().numpy()); T.append(yb.cpu().numpy()); S.extend(sb.cpu().tolist())
-                y_pred = np.clip(np.concatenate(P,0),0,None)
-                y_true = np.concatenate(T,0)
+                        if self.params.scaler == "revin":
+                            out = out * std.unsqueeze(1) + mu.unsqueeze(1)
+                            yb = yb * std.unsqueeze(1) + mu.unsqueeze(1)
+                        P.append(out.cpu().numpy())
+                        T.append(yb.cpu().numpy())
+                        S.extend(sb.cpu().tolist())
+                y_pred = np.clip(np.concatenate(P, 0), 0, None)
+                y_true = np.concatenate(T, 0)
                 series_ids_val = np.array([self.idx2id[int(i)] for i in S])
                 outlets = [sid.split("::")[0] for sid in series_ids_val]
                 eps = 1e-8
@@ -278,22 +307,33 @@ class PatchTSTTrainer(BaseModel):
                 net.load_state_dict(best_state)
             # compute OOF predictions for this fold
             net.eval()
-            P=[]
+            P = []
+            Y = []
+            S = []
             with torch.no_grad():
-                for xb, yb, sb in va_loader:
+                for xb, yb, sb, mu, std in va_loader:
                     xb = xb.to(self.device, non_blocking=pin)
                     sb = sb.to(self.device, non_blocking=pin)
+                    mu = mu.to(self.device, non_blocking=pin)
+                    std = std.to(self.device, non_blocking=pin)
                     out = net(xb, sb)
+                    if self.params.scaler == "revin":
+                        out = out * std.unsqueeze(1) + mu.unsqueeze(1)
+                        yb = yb * std.unsqueeze(1) + mu.unsqueeze(1)
                     P.append(out.cpu().numpy())
-            y_pred = np.clip(np.concatenate(P,0),0,None)
-            y_true = y_train[va_mask]
-            series_ids_val = np.array(series_ids)[va_mask]
-            oof_df = pd.DataFrame({
-                "series_id": np.repeat(series_ids_val, self.H),
-                "h": np.tile(np.arange(1, self.H+1), len(series_ids_val)),
-                "y": y_true.reshape(-1),
-                "yhat": y_pred.reshape(-1),
-            })
+                    Y.append(yb.cpu().numpy())
+                    S.extend(sb.cpu().tolist())
+            y_pred = np.clip(np.concatenate(P, 0), 0, None)
+            y_true = np.concatenate(Y, 0)
+            series_ids_val = np.array([self.idx2id[int(i)] for i in S])
+            oof_df = pd.DataFrame(
+                {
+                    "series_id": np.repeat(series_ids_val, self.H),
+                    "h": np.tile(np.arange(1, self.H + 1), len(series_ids_val)),
+                    "y": y_true.reshape(-1),
+                    "yhat": y_pred.reshape(-1),
+                }
+            )
             self.oof_records.extend(oof_df.to_dict("records"))
             self.models.append(net)
         self.save(os.path.join(self.model_dir,"patchtst.pt"))
@@ -303,17 +343,24 @@ class PatchTSTTrainer(BaseModel):
             raise RuntimeError("Model not loaded.")
         if series_idx is None:
             series_idx = np.zeros(len(X_eval), dtype=np.int64)
-        ds = _SeriesDataset(X_eval, np.zeros((X_eval.shape[0], self.H), dtype=np.float32), series_idx)
+        ds = _SeriesDataset(
+            X_eval, np.zeros((X_eval.shape[0], self.H), dtype=np.float32), series_idx, scaler=self.params.scaler
+        )
         pin = self.device != "cpu"
         loader = torch.utils.data.DataLoader(ds, batch_size=self.params.batch_size, shuffle=False, pin_memory=pin)
-        outs=[]
+        outs = []
         with torch.no_grad():
-            for xb,_,sb in loader:
+            for xb, _, sb, mu, std in loader:
                 xb = xb.to(self.device, non_blocking=pin)
                 sb = sb.to(self.device, non_blocking=pin)
-                preds = [m(xb, sb).cpu().numpy() for m in self.models]
-                outs.append(np.mean(preds, axis=0))
-        yhat = np.clip(np.concatenate(outs,0),0,None)
+                mu = mu.to(self.device, non_blocking=pin)
+                std = std.to(self.device, non_blocking=pin)
+                preds = [m(xb, sb).cpu() for m in self.models]
+                out = torch.stack(preds).mean(0)
+                if self.params.scaler == "revin":
+                    out = out * std.unsqueeze(1) + mu.unsqueeze(1)
+                outs.append(out.cpu().numpy())
+        yhat = np.clip(np.concatenate(outs, 0), 0, None)
         return yhat
 
     def get_oof(self) -> pd.DataFrame:
