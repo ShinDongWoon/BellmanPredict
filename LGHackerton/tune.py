@@ -200,46 +200,54 @@ def tune_patchtst(X, y, series_ids, label_dates, cfg):
     study = optuna.create_study(direction="minimize")
 
     def objective(trial: optuna.Trial) -> float:
-        sampled_params = {
-            "d_model": trial.suggest_categorical("d_model", [64, 128, 256]),
-            "n_heads": trial.suggest_categorical("n_heads", [4, 8]),
-            "depth": trial.suggest_int("depth", 2, 6),
-            "patch_len": trial.suggest_categorical("patch_len", [4, 8]),
-            "stride": trial.suggest_categorical("stride", [1, 2]),
-            "dropout": trial.suggest_float("dropout", 0.0, 0.5),
-            "id_embed_dim": trial.suggest_categorical("id_embed_dim", [0, 16]),
-            "lr": trial.suggest_float("lr", 1e-4, 1e-2, log=True),
-            "weight_decay": trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True),
-            "batch_size": trial.suggest_categorical("batch_size", [64, 128, 256]),
-            "max_epochs": trial.suggest_int("max_epochs", 50, 200),
-            "patience": trial.suggest_int("patience", 5, 30),
-        }
+        trainer = None
+        try:
+            set_seed(cfg.seed)
+            sampled_params = {
+                "d_model": trial.suggest_categorical("d_model", [64, 128, 256]),
+                "n_heads": trial.suggest_categorical("n_heads", [4, 8]),
+                "depth": trial.suggest_int("depth", 2, 6),
+                "patch_len": trial.suggest_categorical("patch_len", [4, 8]),
+                "stride": trial.suggest_categorical("stride", [1, 2]),
+                "dropout": trial.suggest_float("dropout", 0.0, 0.5),
+                "id_embed_dim": trial.suggest_categorical("id_embed_dim", [0, 16]),
+                "lr": trial.suggest_float("lr", 1e-4, 1e-2, log=True),
+                "weight_decay": trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True),
+                "batch_size": trial.suggest_categorical("batch_size", [64, 128, 256]),
+                "max_epochs": trial.suggest_int("max_epochs", 50, 200),
+                "patience": trial.suggest_int("patience", 5, 30),
+            }
 
-        params = PatchTSTParams(**sampled_params)
-        device = "cuda" if torch and torch.cuda.is_available() else "cpu"
-        trainer = PatchTSTTrainer(
-            params=params,
-            L=L,
-            H=H,
-            model_dir=getattr(cfg, "model_dir", "."),
-            device=device,
-        )
+            params = PatchTSTParams(**sampled_params)
+            device = "cuda" if torch and torch.cuda.is_available() else "cpu"
+            trainer = PatchTSTTrainer(
+                params=params,
+                L=L,
+                H=H,
+                model_dir=getattr(cfg, "model_dir", "."),
+                device=device,
+            )
 
-        trainer.train(X, y, series_ids, label_dates, cfg)
-        oof = trainer.get_oof()
-        outlets = oof["series_id"].str.split("::").str[0].values
-        score = weighted_smape_np(
-            oof["y"].values,
-            oof["yhat"].values,
-            outlets,
-            priority_weight=getattr(cfg, "priority_weight", 1.0),
-        )
+            trainer.train(X, y, series_ids, label_dates, cfg)
+            oof = trainer.get_oof()
+            outlets = oof["series_id"].str.split("::").str[0].values
+            score = weighted_smape_np(
+                oof["y"].values,
+                oof["yhat"].values,
+                outlets,
+                priority_weight=getattr(cfg, "priority_weight", 1.0),
+            )
 
-        gc.collect()
-        if torch and torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-        return float(score)
+            return float(score)
+        except Exception as e:
+            trial.set_user_attr("status", "failed")
+            raise optuna.TrialPruned() from e
+        finally:
+            if trainer is not None:
+                del trainer
+            gc.collect()
+            if torch and torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     n_trials = getattr(cfg, "n_trials", 20)
     timeout = getattr(cfg, "timeout", None)
