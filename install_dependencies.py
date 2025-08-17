@@ -2,7 +2,7 @@ import subprocess, sys, pathlib
 
 def main():
     reqs = ["numpy", "pandas", "lightgbm"]
-    optional = ["torch", "holidayskr"]
+    optional = ["torch", "holidayskr", "optuna"]
     subprocess.check_call([sys.executable, "-m", "pip", "install", *reqs])
     try:
         subprocess.check_call([sys.executable, "-m", "pip", "install", *optional])
