@@ -51,8 +51,8 @@ def convert_to_submission(pred_df: pd.DataFrame, sample_path: str) -> pd.DataFra
     if missing_cols:
         logging.warning("Missing columns in predictions: %s", sorted(missing_cols))
 
-    out_df = pd.concat([sample_df.iloc[:, 0], wide], axis=1)
-    out_df.columns = sample_df.columns
+    out_df = sample_df.copy()
+    out_df.iloc[:, 1:] = wide.to_numpy()
     return out_df
 
 def main():
