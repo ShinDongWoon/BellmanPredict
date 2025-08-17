@@ -250,26 +250,54 @@ class CalendarFeatureMaker:
     def __init__(self, holiday_provider: Optional[HolidayProvider] = None):
         self.holiday_provider = holiday_provider or HolidayProvider()
         self._holiday_cache: set = set()
+        self._woy_cols: List[str] = []
+        self._month_cols: List[str] = []
+        self._promo_col: Optional[str] = None
 
     def fit(self, df: pd.DataFrame):
         years = df[DATE_COL].dt.year.unique().tolist()
         self._holiday_cache = self.holiday_provider.compute(years)
+        # store columns to align dummies at transform
+        weeks = df[DATE_COL].dt.isocalendar().week.unique().tolist()
+        months = df[DATE_COL].dt.month.unique().tolist()
+        self._woy_cols = [f"woy_{w}" for w in sorted(weeks)]
+        self._month_cols = [f"month_{m}" for m in sorted(months)]
+        promo_candidates = [
+            c
+            for c in ["is_promo", "promo", "promotion", "promotion_flag"]
+            if c in df.columns
+        ]
+        self._promo_col = promo_candidates[0] if promo_candidates else None
         return self
 
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
         d = df.copy()
         d["year"] = d[DATE_COL].dt.year
-        d["month"] = d[DATE_COL].dt.month
         d["day"] = d[DATE_COL].dt.day
         d["dow"] = d[DATE_COL].dt.weekday  # 0=Mon
-        d["weekofyear"] = d[DATE_COL].dt.isocalendar().week.astype(int)
         d["is_weekend"] = d["dow"].isin([5, 6]).astype(np.int8)
         d["is_month_start"] = d[DATE_COL].dt.is_month_start.astype(np.int8)
         d["is_month_end"] = d[DATE_COL].dt.is_month_end.astype(np.int8)
+
+        # base calendar categories
+        d["month"] = d[DATE_COL].dt.month
+        d["weekofyear"] = d[DATE_COL].dt.isocalendar().week.astype(int)
+        month_dum = pd.get_dummies(d["month"], prefix="month", dtype=np.int8)
+        month_dum = month_dum.reindex(columns=self._month_cols, fill_value=0)
+        woy_dum = pd.get_dummies(d["weekofyear"], prefix="woy", dtype=np.int8)
+        woy_dum = woy_dum.reindex(columns=self._woy_cols, fill_value=0)
+        d = pd.concat([d.drop(columns=["month", "weekofyear"]), month_dum, woy_dum], axis=1)
+
         if self._holiday_cache:
             d["is_holiday"] = d[DATE_COL].dt.date.isin(self._holiday_cache).astype(np.int8)
         else:
             d["is_holiday"] = 0
+
+        if self._promo_col is not None and self._promo_col in df.columns:
+            d["is_promo"] = df[self._promo_col].astype(np.int8)
+        else:
+            d["is_promo"] = 0
+
         d["is_priority_outlet"] = d[SHOP_COL].isin(PRIORITY_OUTLETS).astype(np.int8)
         return d
 
@@ -329,7 +357,7 @@ class MissingAndOutlierHandler:
 class StrictFeatureMaker:
     """
     Strict features computed only from past values within max window size L=28.
-    - lags: 1,2,7,14,21,28
+    - lags: 1..(2*H) plus longer-term anchors
     - rolling stats on shifted series
     - intermittent-demand markers
     """
@@ -344,8 +372,9 @@ class StrictFeatureMaker:
         # Shift base for rolling
         s_shift = gb[SALES_FILLED_COL].shift(1)
 
-        # Lags
-        for lag in [1, 2, 7, 14, 21, 27, 28]:
+        # Lags up to 2*H plus anchors to preserve 28-day history
+        lags = list(range(1, 2 * H + 1)) + [21, 27, 28]
+        for lag in sorted(set(lags)):
             d[f"lag_{lag}"] = gb[SALES_FILLED_COL].shift(lag)
         vprint("[Strict] lag features done")
 

@@ -10,6 +10,8 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import logging
+import os
 from pathlib import Path
 from typing import Any, List, Tuple
 
@@ -28,6 +30,9 @@ from LGHackerton.preprocess import Preprocessor
 from LGHackerton.models.base_trainer import TrainConfig
 from LGHackerton.utils.metrics import weighted_smape_np
 from LGHackerton.utils.seed import set_seed
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # simple demo objective (kept for backward compatibility)
@@ -65,6 +70,7 @@ def demo_study(n_trials: int = 20) -> None:
 _LGBM_TRAIN: pd.DataFrame | None = None
 _FEATURE_COLS: List[str] | None = None
 _TRIAL_LOG: List[dict[str, Any]] = []
+_FEATURE_IMPORTANCE: List[dict[str, Any]] = []
 
 TRIAL_LOG_PATH = OPTUNA_DIR / "lgbm_trials.json"
 
@@ -118,51 +124,61 @@ def objective_lgbm(trial: optuna.Trial) -> float:
     priority_w = TRAIN_CFG.get("priority_weight", 1.0)
 
     for h in range(1, 8):
-        dfh = df[df["h"] == h]
-        if dfh.empty:
-            continue
-        dfh = dfh.sort_values("date")
-        dates = dfh["date"].sort_values().unique()
-        if len(dates) < 2:
-            continue
-        split = int(len(dates) * 0.8)
-        tr_dates, va_dates = dates[:split], dates[split:]
-        tr_mask = dfh["date"].isin(tr_dates)
-        va_mask = dfh["date"].isin(va_dates)
+        try:
+            dfh = df[df["h"] == h]
+            if dfh.empty:
+                continue
+            dfh = dfh.sort_values("date")
+            dates = dfh["date"].sort_values().unique()
+            if len(dates) < 2:
+                continue
+            split = int(len(dates) * 0.8)
+            tr_dates, va_dates = dates[:split], dates[split:]
+            tr_mask = dfh["date"].isin(tr_dates)
+            va_mask = dfh["date"].isin(va_dates)
 
-        X_tr = dfh.loc[tr_mask, feat_cols].values.astype("float32")
-        y_tr = dfh.loc[tr_mask, "y"].values.astype("float32")
-        X_va = dfh.loc[va_mask, feat_cols].values.astype("float32")
-        y_va = dfh.loc[va_mask, "y"].values.astype("float32")
+            X_tr = dfh.loc[tr_mask, feat_cols].values.astype("float32")
+            y_tr = dfh.loc[tr_mask, "y"].values.astype("float32")
+            X_va = dfh.loc[va_mask, feat_cols].values.astype("float32")
+            y_va = dfh.loc[va_mask, "y"].values.astype("float32")
 
-        dtrain = lgb.Dataset(X_tr, label=y_tr)
-        dvalid = lgb.Dataset(X_va, label=y_va)
-        callbacks = [lgb.log_evaluation(period=0)]
-        if "early_stopping_rounds" in params:
-            if str(params.get("metric", "")).lower() != "none":
-                callbacks.append(
-                    lgb.early_stopping(
-                        stopping_rounds=params["early_stopping_rounds"],
-                        verbose=False,
+            dtrain = lgb.Dataset(X_tr, label=y_tr)
+            dvalid = lgb.Dataset(X_va, label=y_va)
+            callbacks = [lgb.log_evaluation(period=0)]
+            if "early_stopping_rounds" in params:
+                if str(params.get("metric", "")).lower() != "none":
+                    callbacks.append(
+                        lgb.early_stopping(
+                            stopping_rounds=params["early_stopping_rounds"],
+                            verbose=False,
+                        )
                     )
-                )
-            params.pop("early_stopping_rounds")
-        booster = lgb.train(
-            params=params,
-            train_set=dtrain,
-            valid_sets=[dvalid],
-            callbacks=callbacks,
-        )
+                params.pop("early_stopping_rounds")
+            booster = lgb.train(
+                params=params,
+                train_set=dtrain,
+                valid_sets=[dvalid],
+                callbacks=callbacks,
+            )
 
-        preds = booster.predict(X_va, num_iteration=booster.best_iteration)
-        outlets = dfh.loc[va_mask, "series_id"].str.split("::").str[0].values
-        score = weighted_smape_np(y_va, preds, outlets, priority_weight=priority_w)
-        scores.append(score)
+            preds = booster.predict(X_va, num_iteration=booster.best_iteration)
+            outlets = dfh.loc[va_mask, "series_id"].str.split("::").str[0].values
+            score = weighted_smape_np(y_va, preds, outlets, priority_weight=priority_w)
+            scores.append(score)
 
-        del booster, dtrain, dvalid
+            # record feature importance
+            fi = booster.feature_importance(importance_type="gain")
+            for feat, imp in zip(feat_cols, fi):
+                _FEATURE_IMPORTANCE.append({"feature": feat, "fold": h, "importance": float(imp)})
+
+            del booster, dtrain, dvalid
+        except Exception as e:  # pragma: no cover - robustness
+            logger.exception("Trial %s fold %s failed: %s", trial.number, h, e)
+            continue
 
     final_score = float(np.mean(scores)) if scores else float("inf")
     _log_trial({"number": trial.number, "value": final_score, "params": trial.params})
+    logger.info("Trial %d completed score=%.5f params=%s", trial.number, final_score, trial.params)
 
     gc.collect()
     if torch and torch.cuda.is_available():  # pragma: no cover - GPU only
@@ -171,7 +187,11 @@ def objective_lgbm(trial: optuna.Trial) -> float:
     return final_score
 
 
-def tune_lgbm(n_trials: int, timeout: int | None = None) -> optuna.Study:
+def tune_lgbm(
+    n_trials: int,
+    timeout: int | None = None,
+    search: str = "bayes",
+) -> optuna.Study:
     """Run an Optuna study to tune LightGBM hyperparameters."""
 
     if TRIAL_LOG_PATH.exists():
@@ -182,8 +202,17 @@ def tune_lgbm(n_trials: int, timeout: int | None = None) -> optuna.Study:
 
     _prepare_lgbm_train()  # ensure data prepared once
 
-    study = optuna.create_study(direction="minimize")
-    study.optimize(objective_lgbm, n_trials=n_trials, timeout=timeout)
+    seed = TRAIN_CFG.get("seed", 42)
+    if search == "random":
+        sampler = optuna.samplers.RandomSampler(seed=seed)
+    else:
+        sampler = optuna.samplers.TPESampler(seed=seed)
+
+    study = optuna.create_study(direction="minimize", sampler=sampler)
+    try:
+        study.optimize(objective_lgbm, n_trials=n_trials, timeout=timeout)
+    except Exception as e:  # pragma: no cover - robustness
+        logger.exception("Study failed: %s", e)
 
     out_path = OPTUNA_DIR / "lgbm_study.json"
     with out_path.open("w", encoding="utf-8") as f:
@@ -193,6 +222,13 @@ def tune_lgbm(n_trials: int, timeout: int | None = None) -> optuna.Study:
             ensure_ascii=False,
             indent=2,
         )
+
+    if _FEATURE_IMPORTANCE:
+        fi_df = pd.DataFrame(_FEATURE_IMPORTANCE)
+        fi_agg = fi_df.groupby(["feature", "fold"], as_index=False)["importance"].mean()
+        os.makedirs("artifacts", exist_ok=True)
+        fi_agg.to_csv(Path("artifacts") / "lgbm_feature_importance.csv", index=False)
+
     return study
 
 
@@ -279,12 +315,15 @@ def main() -> None:  # pragma: no cover - CLI entry point
     parser = argparse.ArgumentParser(description="Hyperparameter tuning utilities")
     parser.add_argument("--lgbm", action="store_true", help="tune LightGBM hyperparameters")
     parser.add_argument("--patch", action="store_true", help="tune PatchTST hyperparameters")
-    parser.add_argument("--trials", type=int, default=20, help="number of Optuna trials")
+    parser.add_argument("--n-trials", type=int, default=30, help="number of Optuna trials")
+    parser.add_argument(
+        "--search", choices=["random", "bayes"], default="bayes", help="sampler type"
+    )
     parser.add_argument("--timeout", type=int, default=None, help="time limit for tuning in seconds")
     args = parser.parse_args()
 
     if args.lgbm:
-        tune_lgbm(args.trials, args.timeout)
+        tune_lgbm(args.n_trials, args.timeout, args.search)
 
     if args.patch:
         df_raw = pd.read_csv(TRAIN_PATH)
@@ -292,12 +331,12 @@ def main() -> None:  # pragma: no cover - CLI entry point
         df_full = pp.fit_transform_train(df_raw)
         X, y, series_ids, label_dates = pp.build_patch_train(df_full)
         cfg = TrainConfig(**TRAIN_CFG)
-        cfg.n_trials = args.trials
+        cfg.n_trials = args.n_trials
         cfg.timeout = args.timeout
         tune_patchtst(X, y, series_ids, label_dates, cfg)
 
     if not args.lgbm and not args.patch:
-        demo_study(args.trials)
+        demo_study(args.n_trials)
 
 
 if __name__ == "__main__":  # pragma: no cover - script entry point
