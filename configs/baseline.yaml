@@ -4,3 +4,4 @@ rocv_n_folds: 3
 rocv_stride_days: 7
 rocv_val_span_days: 7
 purge_days: 28
+input_lens: [96, 168, 336]

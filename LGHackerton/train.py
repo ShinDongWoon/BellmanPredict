@@ -275,7 +275,7 @@ def main(show_progress: bool | None = None):
     if TORCH_OK and not args.skip_tune and patch_input_len is None:
         patch_file = Path(OPTUNA_DIR) / "patchtst_best.json"
         if args.force_tune or not patch_file.exists():
-            tune_patchtst(X_train, y_train, series_ids, label_dates, cfg)
+            tune_patchtst(pp, df_full, cfg)
         patch_params_dict, _ = load_best_patch_params()
 
     if TORCH_OK:

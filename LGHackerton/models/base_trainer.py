@@ -2,7 +2,7 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 @dataclass
 class TrainConfig:
@@ -24,6 +24,7 @@ class TrainConfig:
     purge_days:int=0                 # explicit purge gap (0 -> derive from purge_mode)
     min_val_samples:int=28           # minimum validation samples per fold
     purge_mode:str="L"               # fallback for legacy behaviour
+    input_lens: List[int] | None = None
 
 class BaseModel(ABC):
     def __init__(self, model_params: Dict[str, Any], model_dir: str):

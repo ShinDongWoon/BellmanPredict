@@ -311,7 +311,7 @@ def tune_lgbm(
     return study
 
 
-def tune_patchtst(X, y, series_ids, label_dates, cfg):
+def tune_patchtst(pp, df_full, cfg):
     """Tune PatchTST hyperparameters using Optuna."""
 
     from LGHackerton.models.patchtst_trainer import (
@@ -319,12 +319,16 @@ def tune_patchtst(X, y, series_ids, label_dates, cfg):
         PatchTSTTrainer,
         TORCH_OK,
     )
-    from LGHackerton.preprocess import L, H
+    from LGHackerton.preprocess import H
+    from LGHackerton.preprocess.preprocess_pipeline_v1_1 import SampleWindowizer
 
     if not TORCH_OK:
         raise RuntimeError("PyTorch not available for PatchTST")
 
     study = optuna.create_study(direction="minimize")
+
+    dataset_cache: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = {}
+    input_lens = getattr(cfg, "input_lens", [96, 168, 336])
 
     def objective(trial: optuna.Trial) -> float:
         """Train a PatchTST model for a single Optuna trial.
@@ -386,12 +390,16 @@ def tune_patchtst(X, y, series_ids, label_dates, cfg):
                 )
 
             set_seed(cfg.seed)
+            input_len = trial.suggest_categorical("input_len", input_lens)
+            if input_len not in dataset_cache:
+                pp.windowizer = SampleWindowizer(lookback=input_len, horizon=H)
+                dataset_cache[input_len] = pp.build_patch_train(df_full)
+            X, y, series_ids, label_dates = dataset_cache[input_len]
+
             sampled_params = {
                 "d_model": trial.suggest_categorical("d_model", [64, 128, 256]),
                 "n_heads": trial.suggest_categorical("n_heads", [4, 8]),
                 "depth": trial.suggest_int("depth", 2, 6),
-                "patch_len": trial.suggest_categorical("patch_len", [4, 8]),
-                "stride": trial.suggest_categorical("stride", [1, 2]),
                 "dropout": trial.suggest_float("dropout", 0.0, 0.5),
                 "id_embed_dim": trial.suggest_categorical("id_embed_dim", [0, 16]),
                 "lr": trial.suggest_float("lr", 1e-4, 1e-2, log=True),
@@ -400,12 +408,17 @@ def tune_patchtst(X, y, series_ids, label_dates, cfg):
                 "max_epochs": trial.suggest_int("max_epochs", 50, 200),
                 "patience": trial.suggest_int("patience", 5, 30),
             }
+            patch_len = trial.suggest_categorical("patch_len", [14, 21])
+            sampled_params["patch_len"] = patch_len
+            sampled_params["stride"] = patch_len
+            if input_len % patch_len != 0:
+                raise optuna.TrialPruned()
 
             params = PatchTSTParams(**sampled_params)
             device = "cuda" if torch and torch.cuda.is_available() else "cpu"
             trainer = PatchTSTTrainer(
                 params=params,
-                L=L,
+                L=input_len,
                 H=H,
                 model_dir=getattr(cfg, "model_dir", "."),
                 device=device,
@@ -572,11 +585,12 @@ def main() -> None:  # pragma: no cover - CLI entry point
         df_raw = pd.read_csv(TRAIN_PATH)
         pp = Preprocessor(show_progress=False)
         df_full = pp.fit_transform_train(df_raw)
-        X, y, series_ids, label_dates = pp.build_patch_train(df_full)
         cfg = TrainConfig(**TRAIN_CFG)
         cfg.n_trials = args.n_trials
         cfg.timeout = args.timeout
-        tune_patchtst(X, y, series_ids, label_dates, cfg)
+        if getattr(cfg, "input_lens", None) is None:
+            cfg.input_lens = [96, 168, 336]
+        tune_patchtst(pp, df_full, cfg)
 
     if not args.lgbm and not args.patch:
         demo_study(args.n_trials)
