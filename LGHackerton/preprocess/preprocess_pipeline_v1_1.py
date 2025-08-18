@@ -510,13 +510,18 @@ class SampleWindowizer:
     - For PatchTST: X windows of shape (28, 1) and y of shape (7,)
     """
 
-    def __init__(self, lookback: int = L, horizon: int = H):
+    def __init__(
+            self, lookback: int = L, horizon: int = H, guard: Optional[LeakGuard] = None
+    ):
         self.L = lookback
         self.H = horizon
+        self.guard = guard
 
     def build_lgbm_train(
             self, df: pd.DataFrame, feature_cols: List[str]
     ) -> pd.DataFrame:
+        if self.guard:
+            self.guard.assert_scope({"train"})
         d = df.sort_values([SERIES_COL, DATE_COL]).copy()
         # Need at least lag_28 available to respect 28-day features
         if "lag_27" not in d.columns:
@@ -555,6 +560,8 @@ class SampleWindowizer:
     def build_lgbm_eval(
             self, df_eval: pd.DataFrame, feature_cols: List[str], show_progress: bool = False
     ) -> pd.DataFrame:
+        if self.guard:
+            self.guard.assert_scope({"eval"})
         d = df_eval.sort_values([SERIES_COL, DATE_COL]).copy()
         out_rows = []
         gb = d.groupby(SERIES_COL, sort=False)
@@ -587,6 +594,8 @@ class SampleWindowizer:
             self, df: pd.DataFrame
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Build PatchTST training windows with identifiers."""
+        if self.guard:
+            self.guard.assert_scope({"train"})
         d = df.sort_values([SERIES_COL, DATE_COL]).copy()
         X_list, Y_list, S_list, D_list = [], [], [], []
         for sid, g in d.groupby(SERIES_COL, sort=False):
@@ -619,6 +628,8 @@ class SampleWindowizer:
     def build_patch_eval(
             self, df_eval: pd.DataFrame
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        if self.guard:
+            self.guard.assert_scope({"eval"})
         d = df_eval.sort_values([SERIES_COL, DATE_COL]).copy()
         X_list, S_list, D_list = [], [], []
         for sid, g in d.groupby(SERIES_COL, sort=False):
@@ -667,7 +678,7 @@ class Preprocessor:
         self.strict_feats = StrictFeatureMaker()
         self.rich = RichLookupBuilder()
         self.encoder = Encoder()
-        self.windowizer = SampleWindowizer()
+        self.windowizer = SampleWindowizer(guard=self.guard)
         self.feature_cols: List[str] = []
         self.show_progress = show_progress
 
@@ -676,6 +687,7 @@ class Preprocessor:
     # --------------------------
     def fit_transform_train(self, df_raw: pd.DataFrame) -> pd.DataFrame:
         self.guard.set_scope("train")
+        self.guard.assert_scope({"train"})
 
         def _schema(df: pd.DataFrame) -> pd.DataFrame:
             df = self.schema.fit(df).transform(df, allow_new=True)
@@ -741,6 +753,7 @@ class Preprocessor:
     # --------------------------
     def transform_eval(self, df_eval_raw: pd.DataFrame) -> pd.DataFrame:
         self.guard.set_scope("eval")
+        self.guard.assert_scope({"eval"})
 
         steps = [
             ("schema", lambda df: self.schema.transform(df, allow_new=False)),
@@ -768,17 +781,21 @@ class Preprocessor:
     # Build datasets
     # --------------------------
     def build_lgbm_train(self, df_full: pd.DataFrame) -> pd.DataFrame:
+        self.guard.assert_scope({"train"})
         return self.windowizer.build_lgbm_train(df_full, self.feature_cols)
 
     def build_lgbm_eval(self, df_eval_full: pd.DataFrame) -> pd.DataFrame:
+        self.guard.assert_scope({"eval"})
         return self.windowizer.build_lgbm_eval(
             df_eval_full, self.feature_cols, show_progress=self.show_progress
         )
 
     def build_patch_train(self, df_full: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        self.guard.assert_scope({"train"})
         return self.windowizer.build_patch_train(df_full)
 
     def build_patch_eval(self, df_eval_full: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        self.guard.assert_scope({"eval"})
         return self.windowizer.build_patch_eval(df_eval_full)
 
     # --------------------------
@@ -811,7 +828,7 @@ class Preprocessor:
         # re-wire
         self.cont_fix = DateContinuityFixer()
         self.strict_feats = StrictFeatureMaker()
-        self.windowizer = SampleWindowizer()
+        self.windowizer = SampleWindowizer(guard=self.guard)
 
     # --------------------------
     # Helpers
