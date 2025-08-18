@@ -6,6 +6,9 @@ import json
 import logging
 from pathlib import Path
 import pandas as pd
+import numpy as np
+from dataclasses import asdict
+from datetime import datetime
 
 from LGHackerton.preprocess import Preprocessor, DATE_COL, SERIES_COL, SALES_COL, L, H
 from LGHackerton.preprocess.preprocess_pipeline_v1_1 import SampleWindowizer
@@ -37,6 +40,49 @@ from LGHackerton.config.default import (
 from LGHackerton.tune import tune_lgbm, tune_patchtst
 from LGHackerton.utils.seed import set_seed
 
+
+def _log_fold_start(seed: int, fold_idx: int, tr_mask: np.ndarray, va_mask: np.ndarray, cfg: TrainConfig, prefix: str) -> None:
+    """Persist fold details to a timestamped JSON file under artifacts."""
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    data = {
+        "seed": seed,
+        "fold": fold_idx,
+        "train_indices": np.where(tr_mask)[0].tolist(),
+        "val_indices": np.where(va_mask)[0].tolist(),
+        "config": asdict(cfg),
+    }
+    out = ARTIFACTS_DIR / f"{prefix}_fold{fold_idx}_{timestamp}.json"
+    with out.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _patch_lgbm_logging(cfg: TrainConfig) -> None:
+    """Monkey-patch LGBMTrainer to log fold information."""
+    original = LGBMTrainer._make_cv_slices
+
+    def _wrapped(self, df_h, cfg_inner, date_col):
+        folds = original(self, df_h, cfg_inner, date_col)
+        for i, (tr_mask, va_mask) in enumerate(folds):
+            _log_fold_start(cfg_inner.seed, i, tr_mask, va_mask, cfg_inner, "train_lgbm")
+        return folds
+
+    LGBMTrainer._make_cv_slices = _wrapped
+
+
+def _patch_patchtst_logging(cfg: TrainConfig) -> None:
+    """Monkey-patch PatchTST trainer ROCV slicing to log folds."""
+    import LGHackerton.models.patchtst_trainer as pt
+
+    original = pt._make_rocv_slices
+
+    def _wrapped(label_dates, n_folds, stride, span, purge):
+        slices = original(label_dates, n_folds, stride, span, purge)
+        for i, (tr_mask, va_mask) in enumerate(slices):
+            _log_fold_start(cfg.seed, i, tr_mask, va_mask, cfg, "train_patchtst")
+        return slices
+
+    pt._make_rocv_slices = _wrapped
 
 def _read_table(path: str) -> pd.DataFrame:
     if path.lower().endswith(".csv"):
@@ -160,6 +206,8 @@ def main(show_progress: bool | None = None):
     cfg = TrainConfig(**TRAIN_CFG)
     cfg.n_trials = args.trials
     cfg.timeout = args.timeout
+    _patch_lgbm_logging(cfg)
+    _patch_patchtst_logging(cfg)
     set_seed(cfg.seed)
     lgb_tr = LGBMTrainer(params=lgb_params, features=pp.feature_cols, model_dir=cfg.model_dir, device=device)
     lgb_tr.train(lgbm_train, cfg)

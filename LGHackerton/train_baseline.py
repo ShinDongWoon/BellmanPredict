@@ -2,9 +2,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import logging
+import json
 from pathlib import Path
 from datetime import datetime
 from typing import Dict
+from dataclasses import asdict
 
 import numpy as np
 import pandas as pd
@@ -77,6 +79,21 @@ def compute_metrics(y_true: np.ndarray,
     }
 
 
+def _log_fold_start(seed: int, fold_idx: int, tr_mask: np.ndarray, va_mask: np.ndarray, cfg: TrainConfig) -> None:
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    data = {
+        "seed": seed,
+        "fold": fold_idx,
+        "train_indices": np.where(tr_mask)[0].tolist(),
+        "val_indices": np.where(va_mask)[0].tolist(),
+        "config": asdict(cfg),
+    }
+    out = ARTIFACTS_DIR / f"baseline_fold{fold_idx}_{timestamp}.json"
+    with out.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
 def make_folds(dates: np.ndarray, cfg: TrainConfig):
     """Generate rolling-origin folds (start, end) tuples."""
     purge_days = cfg.purge_days if cfg.purge_days > 0 else 28
@@ -130,6 +147,7 @@ def main():
     for idx, (train_end, start, end) in enumerate(folds):
         tr_mask = df_raw[DATE_COL] < train_end
         va_mask = (df_raw[DATE_COL] >= start) & (df_raw[DATE_COL] <= end)
+        _log_fold_start(cfg.seed, idx, tr_mask.values, va_mask.values, cfg)
         df_tr_raw = df_raw[tr_mask].copy()
         df_va_raw = df_raw[va_mask].copy()
         if df_tr_raw.empty or df_va_raw.empty:
