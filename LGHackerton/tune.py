@@ -11,6 +11,7 @@ import argparse
 import gc
 import json
 import logging
+import warnings
 import os
 from pathlib import Path
 from typing import Any, List, Tuple
@@ -326,18 +327,64 @@ def tune_patchtst(X, y, series_ids, label_dates, cfg):
     study = optuna.create_study(direction="minimize")
 
     def objective(trial: optuna.Trial) -> float:
+        """Train a PatchTST model for a single Optuna trial.
+
+        Prior to training we attempt to hook into the generation of ROCV
+        folds so that each fold can be logged via :func:`_log_fold_start`.
+        Newer versions expose ``PatchTSTTrainer.register_rocv_callback``;
+        older versions require temporarily wrapping the module-level
+        ``_make_rocv_slices`` helper.  Hooks are removed in the ``finally``
+        block to avoid leaking state across trials.
+        """
+
         trainer = None
         import LGHackerton.models.patchtst_trainer as pt
-        original_rocv = pt._make_rocv_slices
+        from LGHackerton.models.patchtst_trainer import PatchTSTTrainer
 
-        def _logged_rocv(label_dates, n_folds, stride, span, purge):
-            slices = original_rocv(label_dates, n_folds, stride, span, purge)
-            for i, (tr_mask, va_mask) in enumerate(slices):
-                _log_fold_start("tune_patchtst", cfg.seed, f"trial{trial.number}_fold{i}", tr_mask, va_mask, cfg)
-            return slices
+        callback_registered = False
+        original_rocv = None
+
+        def _cb(seed, fold_idx, tr_mask, va_mask, cfg_inner):
+            _log_fold_start(
+                "tune_patchtst",
+                seed,
+                f"trial{trial.number}_fold{fold_idx}",
+                tr_mask,
+                va_mask,
+                cfg_inner,
+            )
 
         try:
-            pt._make_rocv_slices = _logged_rocv
+            if hasattr(PatchTSTTrainer, "register_rocv_callback"):
+                PatchTSTTrainer.register_rocv_callback(_cb)
+                callback_registered = True
+            elif hasattr(pt, "_make_rocv_slices"):
+                warnings.warn(
+                    "PatchTSTTrainer.register_rocv_callback not found; wrapping _make_rocv_slices for fold logging",
+                    stacklevel=2,
+                )
+                original_rocv = pt._make_rocv_slices
+
+                def _logged_rocv(label_dates, n_folds, stride, span, purge):
+                    slices = original_rocv(label_dates, n_folds, stride, span, purge)
+                    for i, (tr_mask, va_mask) in enumerate(slices):
+                        _log_fold_start(
+                            "tune_patchtst",
+                            cfg.seed,
+                            f"trial{trial.number}_fold{i}",
+                            tr_mask,
+                            va_mask,
+                            cfg,
+                        )
+                    return slices
+
+                pt._make_rocv_slices = _logged_rocv
+            else:  # pragma: no cover - defensive fallback
+                warnings.warn(
+                    "No PatchTST fold logging hooks found; fold information will not be logged",
+                    stacklevel=2,
+                )
+
             set_seed(cfg.seed)
             sampled_params = {
                 "d_model": trial.suggest_categorical("d_model", [64, 128, 256]),
@@ -379,7 +426,13 @@ def tune_patchtst(X, y, series_ids, label_dates, cfg):
             trial.set_user_attr("status", "failed")
             raise optuna.TrialPruned() from e
         finally:
-            pt._make_rocv_slices = original_rocv
+            if callback_registered:
+                try:
+                    PatchTSTTrainer._rocv_callbacks.remove(_cb)
+                except Exception:  # pragma: no cover - defensive
+                    pass
+            if original_rocv is not None:
+                pt._make_rocv_slices = original_rocv
             if trainer is not None:
                 del trainer
             gc.collect()
