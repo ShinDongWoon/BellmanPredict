@@ -253,6 +253,7 @@ class CalendarFeatureMaker:
         self._woy_cols: List[str] = []
         self._month_cols: List[str] = []
         self._promo_col: Optional[str] = None
+        self._feature_names: List[str] = []
 
     def fit(self, df: pd.DataFrame):
         years = df[DATE_COL].dt.year.unique().tolist()
@@ -268,6 +269,20 @@ class CalendarFeatureMaker:
             if c in df.columns
         ]
         self._promo_col = promo_candidates[0] if promo_candidates else None
+        self._feature_names = [
+            "year",
+            "day",
+            "dow",
+            "is_weekend",
+            "is_month_start",
+            "is_month_end",
+            "is_holiday",
+            "is_priority_outlet",
+            *self._month_cols,
+            *self._woy_cols,
+        ]
+        if self._promo_col is not None:
+            self._feature_names.append("is_promo")
         return self
 
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -295,8 +310,6 @@ class CalendarFeatureMaker:
 
         if self._promo_col is not None and self._promo_col in df.columns:
             d["is_promo"] = df[self._promo_col].astype(np.int8)
-        else:
-            d["is_promo"] = 0
 
         d["is_priority_outlet"] = d[SHOP_COL].isin(PRIORITY_OUTLETS).astype(np.int8)
         return d
