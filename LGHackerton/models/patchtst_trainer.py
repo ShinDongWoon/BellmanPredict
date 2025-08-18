@@ -120,8 +120,16 @@ class PatchTSTTrainer(BaseModel):
         self.oof_records: List[Dict[str, Any]] = []
     def _ensure_torch(self):
         if not TORCH_OK: raise RuntimeError(f"PyTorch not available: {_TORCH_ERR}")
-    def train(self, X_train: np.ndarray, y_train: np.ndarray, series_ids: np.ndarray, label_dates: np.ndarray, cfg: TrainConfig) -> None:
-        """Train PatchTST models under various validation policies."""
+    def train(self, X_train: np.ndarray, y_train: np.ndarray, series_ids: np.ndarray, label_dates: np.ndarray, cfg: TrainConfig,
+              preprocessors: Optional[List[Any]] = None) -> None:
+        """Train PatchTST models under various validation policies.
+
+        Parameters
+        ----------
+        preprocessors : Optional[List[Any]]
+            Optional list of fold-specific preprocessors or artifacts.
+        """
+        self.preprocessors = preprocessors
         self._ensure_torch(); import torch
         os.makedirs(self.model_dir, exist_ok=True)
         self.oof_records = []

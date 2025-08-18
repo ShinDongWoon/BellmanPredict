@@ -4,7 +4,7 @@ import os, json
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, asdict
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional
 
 import lightgbm as lgb
 from LGHackerton.models.base_trainer import BaseModel, TrainConfig
@@ -63,7 +63,8 @@ class LGBMTrainer(BaseModel):
         assert folds, "No valid folds generated"
         return folds
 
-    def train(self, df_train: pd.DataFrame, cfg: TrainConfig) -> None:
+    def train(self, df_train: pd.DataFrame, cfg: TrainConfig, preprocessors: Optional[List[Any]] = None) -> None:
+        self.preprocessors = preprocessors
         self.use_asinh_target = cfg.use_asinh_target
         self.use_hurdle = getattr(cfg, "use_hurdle", False)
         os.makedirs(self.model_dir, exist_ok=True)

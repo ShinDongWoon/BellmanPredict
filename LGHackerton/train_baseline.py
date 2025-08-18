@@ -122,19 +122,21 @@ def main():
         logging.info("prophet not available: %s", e)
 
     df_raw = pd.read_csv(TRAIN_PATH)
-    pp = Preprocessor(show_progress=False)
-    df_full = pp.fit_transform_train(df_raw)
-
-    dates = np.sort(df_full[DATE_COL].unique())
+    dates = np.sort(pd.to_datetime(df_raw[DATE_COL].unique()))
     folds = make_folds(dates, cfg)
     model_fn = BASELINES[args.model]
     all_fold_metrics = []
 
     for idx, (train_end, start, end) in enumerate(folds):
-        tr_mask = df_full[DATE_COL] < train_end
-        va_mask = (df_full[DATE_COL] >= start) & (df_full[DATE_COL] <= end)
-        df_tr = df_full[tr_mask]
-        df_va = df_full[va_mask]
+        tr_mask = df_raw[DATE_COL] < train_end
+        va_mask = (df_raw[DATE_COL] >= start) & (df_raw[DATE_COL] <= end)
+        df_tr_raw = df_raw[tr_mask].copy()
+        df_va_raw = df_raw[va_mask].copy()
+        if df_tr_raw.empty or df_va_raw.empty:
+            continue
+        pp = Preprocessor(show_progress=False)
+        df_tr = pp.fit_transform_train(df_tr_raw)
+        df_va = pp.transform_eval(df_va_raw)
         y_true_all = []
         y_pred_all = []
         outlet_all = []
