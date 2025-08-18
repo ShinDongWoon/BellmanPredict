@@ -3,7 +3,7 @@ import os, json, warnings
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, asdict
-from typing import Tuple, Iterable, Optional, List, Any, Dict
+from typing import Tuple, Iterable, Optional, List, Any, Dict, Callable
 
 try:
     import torch
@@ -233,6 +233,62 @@ if TORCH_OK:
             return self.head(z)
 
 class PatchTSTTrainer(BaseModel):
+    """Trainer for PatchTST models.
+
+    The class exposes a small callback API that fires whenever rolling-origin
+    cross-validation (ROCV) folds are generated. External consumers may
+    register callbacks via :meth:`register_rocv_callback` to receive the seed,
+    fold index and corresponding train/validation masks. Errors raised inside
+    callbacks are isolated from training by being converted to warnings.
+    """
+
+    #: Callbacks executed for each ROCV fold. Each callback has signature
+    #: ``cb(seed, fold_idx, train_mask, val_mask, cfg)``.
+    _rocv_callbacks: List[Callable[[int, int, np.ndarray, np.ndarray, TrainConfig], None]] = []
+
+    @classmethod
+    def register_rocv_callback(
+        cls,
+        cb: Callable[[int, int, np.ndarray, np.ndarray, TrainConfig], None],
+    ) -> None:
+        """Register a callback invoked for every ROCV fold.
+
+        Parameters
+        ----------
+        cb : Callable[[int, int, np.ndarray, np.ndarray, TrainConfig], None]
+            Function accepting ``(seed, fold_idx, train_mask, val_mask, cfg)``.
+
+        Notes
+        -----
+        Exceptions raised by callbacks are caught and reported as warnings so
+        that training can proceed uninterrupted.
+        """
+
+        cls._rocv_callbacks.append(cb)
+
+    @classmethod
+    def _notify_rocv_callbacks(
+        cls,
+        seed: int,
+        folds: List[Tuple[np.ndarray, np.ndarray]],
+        cfg: TrainConfig,
+    ) -> None:
+        """Execute registered ROCV callbacks.
+
+        Each callback is called with ``(seed, fold_idx, train_mask, val_mask, cfg)``.
+        Errors are swallowed and surfaced as warnings to avoid aborting
+        training when a callback fails.
+        """
+
+        for i, (tr_mask, va_mask) in enumerate(folds):
+            for cb in cls._rocv_callbacks:
+                try:
+                    cb(seed, i, tr_mask, va_mask, cfg)
+                except Exception as exc:  # pragma: no cover - defensive
+                    warnings.warn(
+                        f"ROCV callback {getattr(cb, '__name__', repr(cb))} failed: {exc}"
+                    )
+
     def __init__(self, params: PatchTSTParams, L:int, H:int, model_dir: str, device: str):
         super().__init__(model_params=asdict(params), model_dir=model_dir)
         self.params = params; self.L=L; self.H=H
@@ -241,6 +297,7 @@ class PatchTSTTrainer(BaseModel):
         self.id2idx={}
         self.idx2id=[]
         self.oof_records: List[Dict[str, Any]] = []
+
     def _ensure_torch(self):
         if not TORCH_OK: raise RuntimeError(f"PyTorch not available: {_TORCH_ERR}")
     def train(self, X_train: np.ndarray, y_train: np.ndarray, series_ids: np.ndarray, label_dates: np.ndarray, cfg: TrainConfig,
@@ -346,6 +403,9 @@ class PatchTSTTrainer(BaseModel):
                     continue
                 folds = _make_rocv_slices(label_dates, 1, cfg.rocv_stride_days, span, purge)
                 break
+            # Inform any registered listeners about the ROCV folds. This occurs
+            # before training to allow callers to capture fold information.
+            self._notify_rocv_callbacks(cfg.seed, folds, cfg)
         else:
             raise ValueError(f"Unknown val_policy: {cfg.val_policy}")
         assert folds, "No valid folds generated"
