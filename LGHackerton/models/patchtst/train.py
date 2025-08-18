@@ -82,7 +82,8 @@ class HybridLoss(nn.Module):
         l1 = self.l1(y_pred, y_true)
         smape = self.smape(y_pred, y_true)
         if w is not None:
-            w = w.view_as(l1)
+            if w.ndim == 1:
+                w = w.unsqueeze(1)
             l1 = l1 * w
             smape = smape * w
         loss = self.alpha * l1 + (1.0 - self.alpha) * smape
