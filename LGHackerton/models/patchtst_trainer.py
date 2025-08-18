@@ -16,6 +16,7 @@ except Exception as _e:
 
 from LGHackerton.models.base_trainer import BaseModel, TrainConfig
 from LGHackerton.utils.metrics import smape, weighted_smape_np, PRIORITY_OUTLETS
+from LGHackerton.models.patchtst.train import build_loss
 
 @dataclass
 class PatchTSTParams:
@@ -87,6 +88,8 @@ class PatchTSTParams:
     batch_size: int = 256
     max_epochs: int = 200
     patience: int = 20
+    loss: str = "smape"
+    loss_alpha: float = 0.5
     scaler: str = "per_series"
     # validation settings (mirrors TrainConfig)
     val_policy: str = "ratio"
@@ -438,7 +441,7 @@ class PatchTSTTrainer(BaseModel):
                 self.params.input_dim,
             ).to(self.device)
             opt = torch.optim.AdamW(net.parameters(), lr=self.params.lr, weight_decay=self.params.weight_decay)
-            loss_fn = torch.nn.L1Loss()
+            loss_fn = build_loss(self.params.loss, alpha=self.params.loss_alpha)
             best=float("inf"); best_state=None; bad=0
             for ep in range(self.params.max_epochs):
                 net.train()
@@ -456,7 +459,10 @@ class PatchTSTTrainer(BaseModel):
                             [cfg.priority_weight if o in PRIORITY_OUTLETS else 1.0 for o in outlets],
                             device=self.device,
                         ).view(-1, 1)
-                        loss = (torch.abs(pred - yb) * w).mean()
+                        try:
+                            loss = loss_fn(pred, yb, w)
+                        except TypeError:  # fallback for loss functions without weight support
+                            loss = (loss_fn(pred, yb) * w).mean()
                     else:
                         loss = loss_fn(pred, yb)
                     loss.backward()
