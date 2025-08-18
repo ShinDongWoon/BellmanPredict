@@ -35,7 +35,6 @@ def _read_table(path: str) -> pd.DataFrame:
 
 def convert_to_submission(pred_df: pd.DataFrame, sample_path: str) -> pd.DataFrame:
     sample_df = _read_table(sample_path)
-    sample_df.columns = sample_df.columns.str.strip()
 
     pred_df = pred_df.copy()
     pred_df["series_id"] = pred_df["series_id"].str.replace("::", "_", n=1)
@@ -53,6 +52,7 @@ def convert_to_submission(pred_df: pd.DataFrame, sample_path: str) -> pd.DataFra
 
     out_df = sample_df.copy()
     out_df.iloc[:, 1:] = wide.to_numpy()
+    assert list(out_df.columns) == list(sample_df.columns)
     return out_df
 
 def main():
