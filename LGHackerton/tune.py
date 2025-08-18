@@ -23,6 +23,8 @@ import optuna
 import pandas as pd
 import lightgbm as lgb
 import yaml
+from dataclasses import asdict
+from datetime import datetime
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -31,7 +33,7 @@ try:  # torch is optional; used only for GPU cache clearing
 except Exception:  # pragma: no cover - torch optional
     torch = None  # type: ignore
 
-from LGHackerton.config.default import OPTUNA_DIR, TRAIN_PATH, TRAIN_CFG
+from LGHackerton.config.default import OPTUNA_DIR, TRAIN_PATH, TRAIN_CFG, ARTIFACTS_DIR
 from LGHackerton.preprocess import Preprocessor
 from LGHackerton.models.base_trainer import TrainConfig
 from LGHackerton.utils.metrics import weighted_smape_np
@@ -81,6 +83,22 @@ _FEATURE_IMPORTANCE: List[dict[str, Any]] = []
 TRIAL_LOG_PATH = OPTUNA_DIR / "lgbm_trials.json"
 
 
+def _log_fold_start(prefix: str, seed: int, fold_name: str, tr_mask: np.ndarray, va_mask: np.ndarray, cfg: TrainConfig) -> None:
+    """Persist fold information for a trial to artifacts directory."""
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    data = {
+        "seed": seed,
+        "fold": fold_name,
+        "train_indices": np.where(tr_mask)[0].tolist(),
+        "val_indices": np.where(va_mask)[0].tolist(),
+        "config": asdict(cfg),
+    }
+    out = ARTIFACTS_DIR / f"{prefix}_{fold_name}_{timestamp}.json"
+    with out.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
 def _prepare_lgbm_train(
     df: pd.DataFrame | None = None, feature_cols: List[str] | None = None
 ) -> Tuple[pd.DataFrame, List[str]]:
@@ -115,7 +133,8 @@ def _log_trial(record: dict[str, Any]) -> None:
 def objective_lgbm(trial: optuna.Trial) -> float:
     """Train LightGBM with trial params and evaluate wSMAPE."""
 
-    set_seed(TRAIN_CFG.get("seed", 42))
+    cfg = TrainConfig(**TRAIN_CFG)
+    set_seed(cfg.seed)
     df, feat_cols = _prepare_lgbm_train()
 
     params = {
@@ -151,6 +170,7 @@ def objective_lgbm(trial: optuna.Trial) -> float:
             tr_dates, va_dates = dates[:split], dates[split:]
             tr_mask = dfh["date"].isin(tr_dates)
             va_mask = dfh["date"].isin(va_dates)
+            _log_fold_start("tune_lgbm", cfg.seed, f"trial{trial.number}_h{h}", tr_mask.values, va_mask.values, cfg)
 
             X_tr = dfh.loc[tr_mask, feat_cols].values.astype("float32")
             y_tr = dfh.loc[tr_mask, "y"].values.astype("float32")
@@ -307,7 +327,17 @@ def tune_patchtst(X, y, series_ids, label_dates, cfg):
 
     def objective(trial: optuna.Trial) -> float:
         trainer = None
+        import LGHackerton.models.patchtst_trainer as pt
+        original_rocv = pt._make_rocv_slices
+
+        def _logged_rocv(label_dates, n_folds, stride, span, purge):
+            slices = original_rocv(label_dates, n_folds, stride, span, purge)
+            for i, (tr_mask, va_mask) in enumerate(slices):
+                _log_fold_start("tune_patchtst", cfg.seed, f"trial{trial.number}_fold{i}", tr_mask, va_mask, cfg)
+            return slices
+
         try:
+            pt._make_rocv_slices = _logged_rocv
             set_seed(cfg.seed)
             sampled_params = {
                 "d_model": trial.suggest_categorical("d_model", [64, 128, 256]),
@@ -349,6 +379,7 @@ def tune_patchtst(X, y, series_ids, label_dates, cfg):
             trial.set_user_attr("status", "failed")
             raise optuna.TrialPruned() from e
         finally:
+            pt._make_rocv_slices = original_rocv
             if trainer is not None:
                 del trainer
             gc.collect()
