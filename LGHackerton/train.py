@@ -74,13 +74,19 @@ def _patch_lgbm_logging(cfg: TrainConfig) -> None:
 def _patch_patchtst_logging(cfg: TrainConfig) -> None:
     """Attach fold logging callbacks to ``PatchTSTTrainer``.
 
+    The registered callback runs once per ROCV fold with signature
+    ``(seed, fold_idx, train_mask, val_mask, cfg)``. ``PatchTSTTrainer``
+    isolates failures in callbacks by converting exceptions into warnings.
+
     Fallback order:
     1) ``PatchTSTTrainer.register_rocv_callback`` if available.
     2) Wrap legacy ``_make_rocv_slices`` and warn once.
     3) Otherwise warn that fold logging is disabled.
 
-    Training proceeds even when hooks are absent. At most one warning is
-    emitted to avoid noisy logs.
+    Private helpers such as ``_make_rocv_slices`` are intentionally not part
+    of the public surface; wrapping them only serves legacy versions. Training
+    proceeds even when hooks are absent. At most one warning is emitted to
+    avoid noisy logs.
     """
 
     # Import class and module to inspect available hooks at runtime.
@@ -91,10 +97,12 @@ def _patch_patchtst_logging(cfg: TrainConfig) -> None:
         # Preferred modern API: register a callback that logs each fold.
         def _cb(seed, fold_idx, tr_mask, va_mask, cfg_inner):
             _log_fold_start(seed, fold_idx, tr_mask, va_mask, cfg_inner, "train_patchtst")
-
+        # ``register_rocv_callback`` consumes (seed, fold_idx, train_mask,
+        # val_mask, cfg) and shields training from callback errors.
         PatchTSTTrainer.register_rocv_callback(_cb)
     elif hasattr(pt, "_make_rocv_slices"):
-        # Fallback for older versions: wrap ROCV slicing and warn once.
+        # Legacy fallback: temporarily wrap the private helper. This keeps
+        # compatibility with older releases while avoiding permanent exposure.
         warnings.warn(
             "PatchTSTTrainer.register_rocv_callback not found; wrapping _make_rocv_slices for fold logging",
             stacklevel=2,

@@ -241,9 +241,11 @@ class PatchTSTTrainer(BaseModel):
     fold index and corresponding train/validation masks. Errors raised inside
     callbacks are isolated from training by being converted to warnings.
     """
-
-    #: Callbacks executed for each ROCV fold. Each callback has signature
-    #: ``cb(seed, fold_idx, train_mask, val_mask, cfg)``.
+    #: Callbacks executed for each ROCV fold immediately after slices are
+    #: computed and before training begins. Each callback must accept
+    #: ``(seed, fold_idx, train_mask, val_mask, cfg)``. Exceptions are caught
+    #: and downgraded to warnings so that failures in user code do not halt
+    #: model training.
     _rocv_callbacks: List[Callable[[int, int, np.ndarray, np.ndarray, TrainConfig], None]] = []
 
     @classmethod
@@ -403,8 +405,9 @@ class PatchTSTTrainer(BaseModel):
                     continue
                 folds = _make_rocv_slices(label_dates, 1, cfg.rocv_stride_days, span, purge)
                 break
-            # Inform any registered listeners about the ROCV folds. This occurs
-            # before training to allow callers to capture fold information.
+            # Inform any registered listeners about the ROCV folds. Callbacks
+            # run once per fold with ``(seed, fold_idx, train_mask, val_mask, cfg)``
+            # and failures inside callbacks only generate warnings.
             self._notify_rocv_callbacks(cfg.seed, folds, cfg)
         else:
             raise ValueError(f"Unknown val_policy: {cfg.val_policy}")
