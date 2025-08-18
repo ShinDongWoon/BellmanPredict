@@ -4,6 +4,7 @@ import argparse
 import os
 import json
 import logging
+import warnings
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -71,18 +72,47 @@ def _patch_lgbm_logging(cfg: TrainConfig) -> None:
 
 
 def _patch_patchtst_logging(cfg: TrainConfig) -> None:
-    """Monkey-patch PatchTST trainer ROCV slicing to log folds."""
+    """Attach fold logging callbacks to ``PatchTSTTrainer``.
+
+    Fallback order:
+    1) ``PatchTSTTrainer.register_rocv_callback`` if available.
+    2) Wrap legacy ``_make_rocv_slices`` and warn once.
+    3) Otherwise warn that fold logging is disabled.
+
+    Training proceeds even when hooks are absent. At most one warning is
+    emitted to avoid noisy logs.
+    """
+
+    # Import class and module to inspect available hooks at runtime.
+    from LGHackerton.models.patchtst_trainer import PatchTSTTrainer
     import LGHackerton.models.patchtst_trainer as pt
 
-    original = pt._make_rocv_slices
+    if hasattr(PatchTSTTrainer, "register_rocv_callback"):
+        # Preferred modern API: register a callback that logs each fold.
+        def _cb(seed, fold_idx, tr_mask, va_mask, cfg_inner):
+            _log_fold_start(seed, fold_idx, tr_mask, va_mask, cfg_inner, "train_patchtst")
 
-    def _wrapped(label_dates, n_folds, stride, span, purge):
-        slices = original(label_dates, n_folds, stride, span, purge)
-        for i, (tr_mask, va_mask) in enumerate(slices):
-            _log_fold_start(cfg.seed, i, tr_mask, va_mask, cfg, "train_patchtst")
-        return slices
+        PatchTSTTrainer.register_rocv_callback(_cb)
+    elif hasattr(pt, "_make_rocv_slices"):
+        # Fallback for older versions: wrap ROCV slicing and warn once.
+        warnings.warn(
+            "PatchTSTTrainer.register_rocv_callback not found; wrapping _make_rocv_slices for fold logging",
+            stacklevel=2,
+        )
+        original = pt._make_rocv_slices
 
-    pt._make_rocv_slices = _wrapped
+        def _wrapped(label_dates, n_folds, stride, span, purge):
+            slices = original(label_dates, n_folds, stride, span, purge)
+            for i, (tr_mask, va_mask) in enumerate(slices):
+                _log_fold_start(cfg.seed, i, tr_mask, va_mask, cfg, "train_patchtst")
+            return slices
+
+        pt._make_rocv_slices = _wrapped
+    else:  # pragma: no cover - defensive fallback
+        warnings.warn(
+            "No PatchTST fold logging hooks found; fold information will not be logged",
+            stacklevel=2,
+        )
 
 def _read_table(path: str) -> pd.DataFrame:
     if path.lower().endswith(".csv"):
