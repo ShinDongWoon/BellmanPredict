@@ -125,6 +125,53 @@ class _SeriesDataset(Dataset):
             y = (y - mu) / std
         return x, y, int(self.sids[idx]), np.float32(mu), np.float32(std)
 
+
+def _make_rocv_slices(
+    label_dates: np.ndarray,
+    n_folds: int,
+    stride: int,
+    span: int,
+    purge: np.timedelta64,
+) -> List[Tuple[np.ndarray, np.ndarray]]:
+    """Generate ROCV train/validation boolean masks.
+
+    Parameters
+    ----------
+    label_dates : np.ndarray
+        Array of label dates sorted in chronological order.
+    n_folds : int
+        Number of ROCV folds to generate.
+    stride : int
+        Distance between consecutive validation windows in days.
+    span : int
+        Validation window length in days.
+    purge : np.timedelta64
+        Purge gap applied between training and validation windows.
+
+    Returns
+    -------
+    List[Tuple[np.ndarray, np.ndarray]]
+        List of (train_mask, val_mask) boolean arrays.
+    """
+
+    n = len(label_dates)
+    slices: List[Tuple[np.ndarray, np.ndarray]] = []
+    used = np.zeros(n, dtype=bool)
+    dates = np.sort(np.unique(label_dates))
+
+    for i in range(n_folds):
+        end = dates[-1] - np.timedelta64(i * stride, "D")
+        start = end - np.timedelta64(span - 1, "D")
+        va_mask = (label_dates >= start) & (label_dates <= end) & (~used)
+        tr_mask = label_dates < (start - purge)
+        if va_mask.sum() == 0 or tr_mask.sum() == 0:
+            continue
+        assert label_dates[tr_mask].max() < label_dates[va_mask].min() - purge
+        slices.append((tr_mask, va_mask))
+        used |= va_mask
+
+    return slices
+
 if TORCH_OK:
     class PatchTSTBlock(nn.Module):
         def __init__(self, d_model, n_heads, dropout):
@@ -226,23 +273,11 @@ class PatchTSTTrainer(BaseModel):
         series_idx = np.array([self.id2idx[s] for s in series_ids], dtype=np.int64)
         n = len(label_dates)
         min_samples = max(cfg.min_val_samples, 5 * self.params.batch_size)
-        purge_days = cfg.purge_days if cfg.purge_days > 0 else (self.L + self.H if cfg.purge_mode == "L+H" else self.L)
-        purge = np.timedelta64(purge_days, 'D')
+        purge_days = cfg.purge_days if cfg.purge_days > 0 else (
+            self.L + self.H if cfg.purge_mode == "L+H" else self.L
+        )
+        purge = np.timedelta64(purge_days, "D")
         folds: List[Tuple[np.ndarray, np.ndarray]] = []
-        def _make_rocv_slices(n_folds:int, stride:int, span:int):
-            slices=[]; used = np.zeros(n, dtype=bool)
-            dates = np.sort(np.unique(label_dates))
-            for i in range(n_folds):
-                end = dates[-1] - np.timedelta64(i*stride, 'D')
-                start = end - np.timedelta64(span-1, 'D')
-                va_mask = (label_dates >= start) & (label_dates <= end) & (~used)
-                tr_mask = label_dates < (start - purge)
-                if va_mask.sum() == 0 or tr_mask.sum() == 0:
-                    continue
-                assert label_dates[tr_mask].max() < label_dates[va_mask].min() - purge
-                slices.append((tr_mask, va_mask))
-                used |= va_mask
-            return slices
         if cfg.val_policy == "ratio":
             n_val = max(min_samples, int(cfg.val_ratio * n))
             n_val = min(n_val, n - 1)
@@ -300,8 +335,8 @@ class PatchTSTTrainer(BaseModel):
             span = cfg.rocv_val_span_days
             n_folds = cfg.rocv_n_folds
             while True:
-                folds = _make_rocv_slices(n_folds, cfg.rocv_stride_days, span)
-                if folds and min(f.sum() for _,f in folds) >= min_samples:
+                folds = _make_rocv_slices(label_dates, n_folds, cfg.rocv_stride_days, span, purge)
+                if folds and min(f.sum() for _, f in folds) >= min_samples:
                     break
                 if span > 1:
                     span = max(1, span // 2)
@@ -309,7 +344,7 @@ class PatchTSTTrainer(BaseModel):
                 if n_folds > 1:
                     n_folds -= 1
                     continue
-                folds = _make_rocv_slices(1, cfg.rocv_stride_days, span)
+                folds = _make_rocv_slices(label_dates, 1, cfg.rocv_stride_days, span, purge)
                 break
         else:
             raise ValueError(f"Unknown val_policy: {cfg.val_policy}")
