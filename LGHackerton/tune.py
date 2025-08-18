@@ -555,8 +555,8 @@ def run_patchtst_grid_search(cfg_path: str | Path) -> None:
                 )
                 continue
 
-    os.makedirs("artifacts", exist_ok=True)
-    pd.DataFrame(results).to_csv(Path("artifacts") / "patchtst_search.csv", index=False)
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(results).to_csv(ARTIFACTS_DIR / "patchtst_search.csv", index=False)
 
 
 def main() -> None:  # pragma: no cover - CLI entry point

@@ -162,8 +162,10 @@ def load_best_patch_params() -> tuple[dict, int | None]:
         Lookback length if determined from grid search, otherwise ``None``.
     """
 
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+
     # 1) Grid search CSV
-    search_path = Path("artifacts") / "patchtst_search.csv"
+    search_path = ARTIFACTS_DIR / "patchtst_search.csv"
     if search_path.exists():
         try:
             df = pd.read_csv(search_path)
