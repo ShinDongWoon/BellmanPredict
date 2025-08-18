@@ -19,32 +19,91 @@ from LGHackerton.utils.metrics import smape, weighted_smape_np, PRIORITY_OUTLETS
 
 @dataclass
 class PatchTSTParams:
-    d_model:int=128
-    n_heads:int=8
-    depth:int=4
-    patch_len:int=4
-    stride:int=1
-    dropout:float=0.1
-    id_embed_dim:int=16
-    lr:float=1e-3
-    weight_decay:float=1e-4
-    batch_size:int=256
-    max_epochs:int=200
-    patience:int=20
-    scaler:str="per_series"
+    """Hyperparameters controlling PatchTST training.
+
+    Attributes
+    ----------
+    d_model : int
+        Dimension of the model embeddings.
+    n_heads : int
+        Number of attention heads.
+    depth : int
+        Number of Transformer blocks.
+    patch_len : int
+        Length of each temporal patch.
+    stride : int
+        Stride between successive patches.
+    dropout : float
+        Dropout applied inside Transformer blocks.
+    id_embed_dim : int
+        Dimensionality of optional series ID embeddings. Set to ``0`` to disable.
+    enable_covariates : bool
+        Whether input windows contain additional covariate channels beyond the
+        primary target series.
+    input_dim : int
+        Total number of channels in the input window. This is inferred from the
+        data when training.
+    lr : float
+        Learning rate for the optimizer.
+    weight_decay : float
+        Weight decay for the optimizer.
+    batch_size : int
+        Mini-batch size used during training and inference.
+    max_epochs : int
+        Maximum number of training epochs per fold.
+    patience : int
+        Early stopping patience measured in epochs.
+    scaler : str
+        Scaling strategy ("per_series" or "revin").
+    val_policy : str
+        Validation split policy.
+    val_ratio : float
+        Ratio for the validation split when ``val_policy`` is ``"ratio"``.
+    val_span_days : int
+        Number of days used for validation when ``val_policy`` is ``"span"``.
+    rocv_n_folds : int
+        Rolling-origin cross-validation folds.
+    rocv_stride_days : int
+        Stride between ROCV folds in days.
+    rocv_val_span_days : int
+        Validation span in days for ROCV.
+    purge_days : int
+        Purge window between training and validation sets.
+    min_val_samples : int
+        Minimum number of samples in the validation set.
+    """
+
+    d_model: int = 128
+    n_heads: int = 8
+    depth: int = 4
+    patch_len: int = 4
+    stride: int = 1
+    dropout: float = 0.1
+    id_embed_dim: int = 16
+    enable_covariates: bool = False
+    input_dim: int = 1
+    lr: float = 1e-3
+    weight_decay: float = 1e-4
+    batch_size: int = 256
+    max_epochs: int = 200
+    patience: int = 20
+    scaler: str = "per_series"
     # validation settings (mirrors TrainConfig)
-    val_policy:str="ratio"
-    val_ratio:float=0.2
-    val_span_days:int=28
-    rocv_n_folds:int=3
-    rocv_stride_days:int=7
-    rocv_val_span_days:int=7
-    purge_days:int=0
-    min_val_samples:int=28
+    val_policy: str = "ratio"
+    val_ratio: float = 0.2
+    val_span_days: int = 28
+    rocv_n_folds: int = 3
+    rocv_stride_days: int = 7
+    rocv_val_span_days: int = 7
+    purge_days: int = 0
+    min_val_samples: int = 28
 
 class _SeriesDataset(Dataset):
     def __init__(self, X: np.ndarray, y: np.ndarray, series_ids: Optional[Iterable[int]] = None, scaler: str = "per_series"):
-        self.X = X.astype(np.float32)
+        X = X.astype(np.float32)
+        if X.ndim == 2:  # (N,L) -> (N,L,1)
+            X = X[..., None]
+        self.X = X
         self.y = y.astype(np.float32)
         if series_ids is None:
             series_ids = [0 for _ in range(len(X))]
@@ -55,11 +114,12 @@ class _SeriesDataset(Dataset):
         return self.X.shape[0]
 
     def __getitem__(self, idx):
-        x = self.X[idx]
-        mu = x.mean(); std = x.std()
+        x = self.X[idx].copy()
+        base = x[:, 0]
+        mu = base.mean(); std = base.std()
         if std == 0:
             std = 1.0
-        x = (x - mu) / std
+        x[:, 0] = (base - mu) / std
         y = self.y[idx]
         if self.scaler == "revin":
             y = (y - mu) / std
@@ -81,11 +141,25 @@ if TORCH_OK:
             return x
 
     class PatchTSTNet(nn.Module):
-        def __init__(self, L:int, H:int, d_model:int, n_heads:int, depth:int, patch_len:int, stride:int, dropout:float, id_embed_dim:int=0, num_series:int=0):
+        def __init__(
+            self,
+            L: int,
+            H: int,
+            d_model: int,
+            n_heads: int,
+            depth: int,
+            patch_len: int,
+            stride: int,
+            dropout: float,
+            id_embed_dim: int = 0,
+            num_series: int = 0,
+            input_dim: int = 1,
+        ):
             super().__init__()
             self.L, self.H = L, H
-            self.unfold = nn.Unfold(kernel_size=(patch_len,1), stride=(stride,1))
-            self.proj = nn.Linear(patch_len, d_model)
+            self.patch_len = patch_len
+            self.stride = stride
+            self.proj = nn.Linear(patch_len * input_dim, d_model)
             self.blocks = nn.ModuleList([PatchTSTBlock(d_model, n_heads, dropout) for _ in range(depth)])
             self.norm = nn.LayerNorm(d_model)
             self.head = nn.Sequential(nn.Linear(d_model, d_model), nn.GELU(), nn.Linear(d_model, H))
@@ -95,17 +169,19 @@ if TORCH_OK:
             else:
                 self.id_embed = None
                 self.id_proj = None
+
         def forward(self, x, sid_idx=None):
-            B,L,C = x.shape
-            x2 = x.view(B,1,L,1)
-            p = self.unfold(x2).squeeze(1).transpose(1,2)
+            B, L, C = x.shape
+            p = x.unfold(1, self.patch_len, self.stride)  # (B, n_patches, patch_len, C)
+            p = p.contiguous().view(B, -1, self.patch_len * C)
             z = self.proj(p)
             if self.id_embed is not None and sid_idx is not None:
                 e = self.id_embed(sid_idx)
                 if self.id_proj is not None:
                     e = self.id_proj(e)
                 z = z + e.unsqueeze(1)
-            for blk in self.blocks: z = blk(z)
+            for blk in self.blocks:
+                z = blk(z)
             z = self.norm(z).mean(1)
             return self.head(z)
 
@@ -137,6 +213,13 @@ class PatchTSTTrainer(BaseModel):
         X_train = X_train[order]; y_train = y_train[order]
         series_ids = np.array(series_ids)[order]
         label_dates = label_dates[order]
+        if X_train.ndim == 3:
+            self.params.input_dim = X_train.shape[2]
+        else:
+            self.params.input_dim = 1
+        self.params.enable_covariates = self.params.input_dim > 1
+        self.model_params["input_dim"] = self.params.input_dim
+        self.model_params["enable_covariates"] = self.params.enable_covariates
         unique_sids = sorted(set(series_ids))
         self.id2idx = {sid:i for i,sid in enumerate(unique_sids)}
         self.idx2id = unique_sids
@@ -243,9 +326,19 @@ class PatchTSTTrainer(BaseModel):
             pin = self.device != "cpu"
             tr_loader = DataLoader(tr_ds, batch_size=self.params.batch_size, shuffle=True, pin_memory=pin)
             va_loader = DataLoader(va_ds, batch_size=self.params.batch_size, shuffle=False, pin_memory=pin)
-            net = PatchTSTNet(self.L,self.H,self.params.d_model,self.params.n_heads,self.params.depth,
-                              self.params.patch_len,self.params.stride,self.params.dropout,
-                              self.params.id_embed_dim,len(self.id2idx)).to(self.device)
+            net = PatchTSTNet(
+                self.L,
+                self.H,
+                self.params.d_model,
+                self.params.n_heads,
+                self.params.depth,
+                self.params.patch_len,
+                self.params.stride,
+                self.params.dropout,
+                self.params.id_embed_dim,
+                len(self.id2idx),
+                self.params.input_dim,
+            ).to(self.device)
             opt = torch.optim.AdamW(net.parameters(), lr=self.params.lr, weight_decay=self.params.weight_decay)
             loss_fn = torch.nn.L1Loss()
             best=float("inf"); best_state=None; bad=0
@@ -405,9 +498,19 @@ class PatchTSTTrainer(BaseModel):
         self.params = PatchTSTParams(**self.model_params)
         self.models=[]
         for fname in index:
-            net = PatchTSTNet(self.L,self.H,self.params.d_model,self.params.n_heads,self.params.depth,
-                               self.params.patch_len,self.params.stride,self.params.dropout,
-                               self.params.id_embed_dim,len(self.id2idx))
+            net = PatchTSTNet(
+                self.L,
+                self.H,
+                self.params.d_model,
+                self.params.n_heads,
+                self.params.depth,
+                self.params.patch_len,
+                self.params.stride,
+                self.params.dropout,
+                self.params.id_embed_dim,
+                len(self.id2idx),
+                self.params.input_dim,
+            )
             net.load_state_dict(torch.load(os.path.join(self.model_dir,fname), map_location=torch.device(self.device)))
             net.to(self.device)
             self.models.append(net)

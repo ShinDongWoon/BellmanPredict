@@ -549,12 +549,21 @@ class SampleWindowizer:
             g = g.reset_index(drop=True)
             # windows
             for t in range(self.L - 1, len(g) - self.H):
-                x_window = g.loc[t - self.L + 1: t, SALES_FILLED_COL].values.astype(float)
+                sales = g.loc[t - self.L + 1 : t, SALES_FILLED_COL].values.astype(float)
+                dow_vals = g.loc[t - self.L + 1 : t, "dow"].astype(int).values
+                dow_oh = np.eye(7, dtype=float)[dow_vals]
+                pr_flag = float(g.loc[t, "is_priority_outlet"]) if "is_priority_outlet" in g.columns else 0.0
+                pr_chan = np.full((self.L, 1), pr_flag, dtype=float)
+                x_window = np.concatenate([
+                    sales.reshape(self.L, 1),
+                    dow_oh,
+                    pr_chan,
+                ], axis=1)
                 # Require label availability
-                y_vec = g.loc[t + 1: t + self.H, SALES_COL].values.astype(float)
+                y_vec = g.loc[t + 1 : t + self.H, SALES_COL].values.astype(float)
                 if np.any(np.isnan(y_vec)):
                     continue
-                X_list.append(x_window.reshape(self.L, 1))
+                X_list.append(x_window)
                 Y_list.append(y_vec)
                 S_list.append(sid)
                 D_list.append(g.loc[t + self.H, DATE_COL])
@@ -582,8 +591,17 @@ class SampleWindowizer:
             if len(g) < self.L:
                 warn(f"Eval series {sid}: insufficient length {len(g)} for L={self.L}.")
                 continue
-            x_window = g.loc[len(g) - self.L: len(g) - 1, SALES_FILLED_COL].values.astype(float)
-            X_list.append(x_window.reshape(self.L, 1))
+            sales = g.loc[len(g) - self.L : len(g) - 1, SALES_FILLED_COL].values.astype(float)
+            dow_vals = g.loc[len(g) - self.L : len(g) - 1, "dow"].astype(int).values
+            dow_oh = np.eye(7, dtype=float)[dow_vals]
+            pr_flag = float(g.loc[len(g) - 1, "is_priority_outlet"]) if "is_priority_outlet" in g.columns else 0.0
+            pr_chan = np.full((self.L, 1), pr_flag, dtype=float)
+            x_window = np.concatenate([
+                sales.reshape(self.L, 1),
+                dow_oh,
+                pr_chan,
+            ], axis=1)
+            X_list.append(x_window)
             S_list.append(sid)
             D_list.append(g.loc[len(g) - 1, DATE_COL])
         if not X_list:
