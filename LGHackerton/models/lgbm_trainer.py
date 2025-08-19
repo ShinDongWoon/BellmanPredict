@@ -79,7 +79,17 @@ class LGBMTrainer(BaseModel):
             if dfh.empty:
                 continue
             feat_cols = [c for c in self.features if c in dfh.columns]
-            X = dfh[feat_cols].fillna(0).astype("float32").values
+            X_df = dfh[feat_cols].fillna(0)
+            feat_var = X_df.var(axis=0, ddof=0).to_numpy()
+            if np.all(feat_var == 0):
+                logging.warning(f"h{h}: all feature variances are zero; skipping")
+                continue
+            zero_var_ratio = np.mean(feat_var == 0)
+            if zero_var_ratio > 0.8:
+                logging.warning(
+                    f"h{h}: {zero_var_ratio:.0%} of features have zero variance; check preprocessing feature generation"
+                )
+            X = X_df.astype("float32").values
             y = dfh["y"].astype("float32").values
             # classification label
             z = (y > 0).astype("float32")
