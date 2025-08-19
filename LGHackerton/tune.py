@@ -408,7 +408,7 @@ def tune_patchtst(pp, df_full, cfg):
                 "max_epochs": trial.suggest_int("max_epochs", 50, 200),
                 "patience": trial.suggest_int("patience", 5, 30),
             }
-            patch_len = trial.suggest_categorical("patch_len", [14, 21])
+            patch_len = trial.suggest_categorical("patch_len", 14)
             sampled_params["patch_len"] = patch_len
             sampled_params["stride"] = patch_len
             if input_len % patch_len != 0:
