@@ -15,6 +15,7 @@ import re
 import json
 import math
 import pickle
+import logging
 from dataclasses import dataclass, field
 from typing import Dict, Tuple, Optional, List, Iterable
 
@@ -625,6 +626,7 @@ class PreprocessorArtifacts:
     calendar_maker: CalendarFeatureMaker
     leak_guard: LeakGuard
     feature_cols: List[str]
+    low_var_cols: List[str]
 
 
 class Preprocessor:
@@ -643,6 +645,7 @@ class Preprocessor:
         self.encoder = Encoder()
         self.windowizer = SampleWindowizer()
         self.feature_cols: List[str] = []
+        self.low_var_cols: List[str] = []
 
     # --------------------------
     # Train
@@ -677,8 +680,19 @@ class Preprocessor:
         self.encoder.fit(df)
         df = self.encoder.transform(df)
 
+        # Drop low variance columns
+        self.low_var_cols = [c for c in df.columns if df[c].nunique() <= 1]
+        if self.low_var_cols:
+            logging.warning(
+                "Dropping %d low variance columns: %s",
+                len(self.low_var_cols),
+                self.low_var_cols,
+            )
+            df = df.drop(columns=self.low_var_cols)
+
         # Feature columns for LGBM
         self.feature_cols = self._select_feature_columns(df)
+        assert set(self.low_var_cols).isdisjoint(self.feature_cols)
         vprint(f"[FIT] rich+encode: feature_cols={len(self.feature_cols)}  total_cols={len(df.columns)}")
         return df
 
@@ -696,6 +710,7 @@ class Preprocessor:
         df = self.strict_feats.transform(df)
         df = self.rich.transform(df)
         df = self.encoder.transform(df)
+        df = df.drop(columns=self.low_var_cols, errors="ignore")
         # no feature_cols change
         vprint(f"[EVAL] transformed: rows={len(df)}  series={df[SERIES_COL].nunique()}  cols={len(df.columns)}")
 
@@ -729,6 +744,7 @@ class Preprocessor:
             calendar_maker=self.calendar,
             leak_guard=self.guard,
             feature_cols=self.feature_cols,
+            low_var_cols=self.low_var_cols,
         )
         with open(path, "wb") as f:
             pickle.dump(artifacts, f)
@@ -743,6 +759,7 @@ class Preprocessor:
         self.calendar = art.calendar_maker
         self.guard = art.leak_guard
         self.feature_cols = art.feature_cols
+        self.low_var_cols = art.low_var_cols
         # re-wire
         self.cont_fix = DateContinuityFixer()
         self.strict_feats = StrictFeatureMaker()
