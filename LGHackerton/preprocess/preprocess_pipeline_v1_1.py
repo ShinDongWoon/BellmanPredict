@@ -520,42 +520,55 @@ class SampleWindowizer:
     def build_lgbm_train(
             self, df: pd.DataFrame, feature_cols: List[str]
     ) -> pd.DataFrame:
+        """Vectorized construction of the direct-forecast dataset for LGBM.
+
+        For each horizon ``h`` in ``{1..H}`` the target ``y_h`` is generated via
+        a grouped forward shift. Rows lacking a full 28-day lookback are
+        discarded, the target columns are unpivoted into a long format and the
+        temporary ``y_h`` columns removed.
+        """
         if self.guard:
             self.guard.assert_scope({"train"})
+
         d = df.sort_values([SERIES_COL, DATE_COL]).copy()
         # Need at least lag_28 available to respect 28-day features
         if "lag_27" not in d.columns:
             raise ValueError("Strict features required before building LGBM train set.")
-        rows = []
-        gb = d.groupby(SERIES_COL, sort=False)
-        for sid, g in tqdm(gb, total=d[SERIES_COL].nunique(), desc="lgbm-train"):
-            g = g.reset_index(drop=True)
-            # candidate t where we have full lookback features
-            valid_mask = g["lag_27"].notna()
-            idxs = np.where(valid_mask.values)[0]
-            for t in idxs:
-                # ensure labels availability for all horizons
-                for h in range(1, self.H + 1):
-                    if t + h >= len(g):
-                        break
-                    y = g.loc[t + h, SALES_COL]
-                    if pd.isna(y):
-                        # training target must exist
-                        continue
-                    row = {
-                        SERIES_COL: sid,
-                        DATE_COL: g.loc[t, DATE_COL],
-                        "h": h,
-                        "y": float(y),
-                    }
-                    row.update(g.loc[t, feature_cols].to_dict())
-                    rows.append(row)
-        if not rows:
-            raise RuntimeError("No training rows produced. Check input coverage.")
-        out = pd.DataFrame(rows)
-        vprint(f"[LGBM/TRAIN] rows={len(out)}  feats={len(feature_cols)}")
 
-        return out.reset_index(drop=True)
+        # --- Vectorised target generation -------------------------------------------------
+        for h in range(1, self.H + 1):
+            d[f"y_{h}"] = d.groupby(SERIES_COL)[SALES_COL].shift(-h)
+
+        # Optional downcast of feature columns to save memory
+        for c in feature_cols:
+            if pd.api.types.is_float_dtype(d[c]):
+                d[c] = d[c].astype("float32")
+
+        # --- Filter base rows once --------------------------------------------------------
+        base = d[d["lag_27"].notna()]
+        base = base.dropna(
+            subset=[f"y_{h}" for h in range(1, self.H + 1)], how="all"
+        )
+
+        # --- Unpivot horizons to long format ----------------------------------------------
+        long = base.melt(
+            id_vars=[SERIES_COL, DATE_COL, *feature_cols],
+            value_vars=[f"y_{h}" for h in range(1, self.H + 1)],
+            var_name="h",
+            value_name="y",
+        )
+        long = long.dropna(subset=["y"])
+        long["h"] = long["h"].str.extract(r"(\d+)").astype(int)
+
+        # No longer need the temporary y_h columns
+        base.drop(columns=[f"y_{h}" for h in range(1, self.H + 1)], inplace=True, errors="ignore")
+
+        long = long.reset_index(drop=True)
+        long = long[[SERIES_COL, DATE_COL, *feature_cols, "h", "y"]]
+
+        vprint(f"[LGBM/TRAIN] rows={len(long)}  feats={len(feature_cols)}")
+
+        return long
 
     def build_lgbm_eval(
             self, df_eval: pd.DataFrame, feature_cols: List[str], show_progress: bool = False

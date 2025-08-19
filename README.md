@@ -9,6 +9,12 @@ predicted probability of non-zero demand. This convention is implemented in
 `LGBMTrainer`, the standalone LightGBM utilities, and the Optuna tuning
 objective.
 
+## Preprocessing
+
+`SampleWindowizer.build_lgbm_train` now vectorizes target generation and
+unpivoting, producing the same dataset as the previous row-wise
+implementation but more efficiently.
+
 ## Baseline Forecasting
 
 Run baseline models with the provided configuration:
