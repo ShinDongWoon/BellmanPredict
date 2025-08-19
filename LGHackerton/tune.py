@@ -13,6 +13,7 @@ import json
 import logging
 import warnings
 import os
+import tempfile
 from pathlib import Path
 from typing import Any, List, Tuple
 import sys
@@ -37,6 +38,7 @@ except Exception:  # pragma: no cover - torch optional
 from LGHackerton.config.default import OPTUNA_DIR, TRAIN_PATH, TRAIN_CFG, ARTIFACTS_DIR
 from LGHackerton.preprocess import Preprocessor
 from LGHackerton.models.base_trainer import TrainConfig
+from LGHackerton.models.lgbm_trainer import LGBMParams, LGBMTrainer
 from LGHackerton.utils.metrics import weighted_smape_np
 from LGHackerton.utils.seed import set_seed
 
@@ -244,12 +246,101 @@ def objective_lgbm(trial: optuna.Trial) -> float:
     return final_score
 
 
+def objective_lgbm_hurdle(trial: optuna.Trial) -> float:
+    """Train :class:`LGBMTrainer` with hurdle option and evaluate wSMAPE."""
+
+    df, feat_cols = _prepare_lgbm_train()
+
+    params = LGBMParams(
+        num_leaves=trial.suggest_int("num_leaves", 31, 255),
+        max_depth=trial.suggest_int("max_depth", -1, 16),
+        min_data_in_leaf=trial.suggest_int("min_data_in_leaf", 10, 200),
+        learning_rate=trial.suggest_float("learning_rate", 1e-3, 0.3, log=True),
+        subsample=trial.suggest_float("subsample", 0.5, 1.0),
+        colsample_bytree=trial.suggest_float("colsample_bytree", 0.5, 1.0),
+        reg_alpha=trial.suggest_float("reg_alpha", 1e-8, 10.0, log=True),
+        reg_lambda=trial.suggest_float("reg_lambda", 1e-8, 10.0, log=True),
+        tweedie_variance_power=trial.suggest_float("tweedie_variance_power", 1.1, 1.9),
+        n_estimators=trial.suggest_int("n_estimators", 500, 3000),
+        early_stopping_rounds=trial.suggest_int("early_stopping_rounds", 50, 300),
+    )
+
+    device = "cuda" if torch and torch.cuda.is_available() else "cpu"
+
+    cfg_dict = dict(TRAIN_CFG)
+    cfg_dict["use_hurdle"] = True
+    cfg = TrainConfig(**cfg_dict)
+    cfg.n_folds = min(getattr(cfg, "n_folds", 3), 2)
+    cfg.cv_stride = min(getattr(cfg, "cv_stride", 7), 7)
+    set_seed(cfg.seed)
+
+    with tempfile.TemporaryDirectory() as model_dir:
+        trainer = LGBMTrainer(params, feat_cols, model_dir, device)
+
+        original_make_cv = LGBMTrainer._make_cv_slices
+
+        def _logged_cv(self, df_h, cfg_inner, date_col):
+            slices = original_make_cv(self, df_h, cfg_inner, date_col)
+            h_val = int(df_h["h"].iloc[0]) if "h" in df_h.columns and not df_h.empty else -1
+            for i, (tr_mask, va_mask) in enumerate(slices):
+                _log_fold_start(
+                    "tune_lgbm",
+                    cfg.seed,
+                    f"trial{trial.number}_h{h_val}_fold{i}",
+                    tr_mask,
+                    va_mask,
+                    cfg_inner,
+                )
+            return slices
+
+        LGBMTrainer._make_cv_slices = _logged_cv
+        try:
+            trainer.train(df, cfg)
+        finally:
+            LGBMTrainer._make_cv_slices = original_make_cv
+
+        oof = trainer.get_oof()
+        outlets = oof["series_id"].str.split("::").str[0].values
+        score = weighted_smape_np(
+            oof["y"].values,
+            oof["yhat"].values,
+            outlets,
+            priority_weight=cfg.priority_weight,
+        )
+
+        for h in trainer.models:
+            for booster in trainer.models[h]["reg"]:
+                fi = booster.feature_importance(importance_type="gain")
+                for feat, imp in zip(feat_cols, fi):
+                    _FEATURE_IMPORTANCE.append(
+                        {
+                            "feature": feat,
+                            "fold": h,
+                            "importance": float(imp),
+                            "trial": trial.number,
+                        }
+                    )
+
+    final_score = float(score)
+    _log_trial({"number": trial.number, "value": final_score, "params": trial.params})
+    logger.info(
+        "Trial %d completed score=%.5f params=%s", trial.number, final_score, trial.params
+    )
+
+    gc.collect()
+    if torch and torch.cuda.is_available():  # pragma: no cover - GPU only
+        torch.cuda.empty_cache()
+
+    return final_score
+
+
 def tune_lgbm(
     n_trials: int,
     timeout: int | None = None,
     search: str = "bayes",
     train_df: pd.DataFrame | None = None,
     feature_cols: List[str] | None = None,
+    use_hurdle: bool = True,
 ) -> optuna.Study:
     """Run an Optuna study to tune LightGBM hyperparameters.
 
@@ -284,8 +375,9 @@ def tune_lgbm(
         sampler = optuna.samplers.TPESampler(seed=seed)
 
     study = optuna.create_study(direction="minimize", sampler=sampler)
+    objective_fn = objective_lgbm_hurdle if use_hurdle else objective_lgbm
     try:
-        study.optimize(objective_lgbm, n_trials=n_trials, timeout=timeout)
+        study.optimize(objective_fn, n_trials=n_trials, timeout=timeout)
     except Exception as e:  # pragma: no cover - robustness
         logger.exception("Study failed: %s", e)
 
