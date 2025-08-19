@@ -159,7 +159,7 @@ def _make_rocv_slices(
 
     n = len(label_dates)
     slices: List[Tuple[np.ndarray, np.ndarray]] = []
-    used = np.zeros(n, dtype=bool)
+    used = np.zeros(n, dtype=bool)  # prevents overlap among folds
     dates = np.sort(np.unique(label_dates))
 
     for i in range(n_folds):
