@@ -461,6 +461,10 @@ def tune_patchtst(pp, df_full, cfg):
     timeout = getattr(cfg, "timeout", None)
     study.optimize(objective, n_trials=n_trials, timeout=timeout)
 
+    if study.best_trial is None:
+        logger.error("Optuna study finished without any completed trials")
+        raise RuntimeError("No completed trials; cannot retrieve best parameters")
+
     best_path = OPTUNA_DIR / "patchtst_best.json"
     best_path.parent.mkdir(parents=True, exist_ok=True)
     with best_path.open("w", encoding="utf-8") as f:
