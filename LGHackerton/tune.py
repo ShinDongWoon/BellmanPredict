@@ -328,7 +328,9 @@ def tune_patchtst(pp, df_full, cfg):
     study = optuna.create_study(direction="minimize")
 
     dataset_cache: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = {}
-    input_lens = getattr(cfg, "input_lens", [96, 168, 336])
+    input_lens = getattr(cfg, "input_lens", None) or [96, 168, 336]
+    if not isinstance(input_lens, (list, tuple)):
+        input_lens = [input_lens]
 
     def objective(trial: optuna.Trial) -> float:
         """Train a PatchTST model for a single Optuna trial.
