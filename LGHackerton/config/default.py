@@ -40,7 +40,7 @@ SHOW_PROGRESS = True
 LGBM_PARAMS = dict(
     objective="tweedie",
     tweedie_variance_power=1.3,
-    num_leaves=63, max_depth=-1, min_data_in_leaf=50,
+    num_leaves=63, max_depth=-1, min_data_in_leaf=10,
     learning_rate=0.05, subsample=0.8, colsample_bytree=0.8,
     reg_alpha=0.0, reg_lambda=1.0,
     n_estimators=3000, early_stopping_rounds=200,
@@ -56,7 +56,7 @@ TRAIN_CFG = dict(
     seed=42, n_folds=3, cv_stride=7,
     priority_weight=3.0,
     use_weighted_loss=True,
-    use_asinh_target=True,
+    use_asinh_target=False,
     use_hurdle=False,
     model_dir=MODEL_DIR,
     val_policy="ratio",
