@@ -1,5 +1,14 @@
 # BellmanPredict
 
+## Hurdle Model Combination
+
+Throughout the project, binary classification probabilities and regression
+forecasts are combined using probability multiplication. The final demand
+estimate for each horizon is computed as ``p * \hat{y}``, where ``p`` is the
+predicted probability of non-zero demand. This convention is implemented in
+`LGBMTrainer`, the standalone LightGBM utilities, and the Optuna tuning
+objective.
+
 ## Baseline Forecasting
 
 Run baseline models with the provided configuration:
