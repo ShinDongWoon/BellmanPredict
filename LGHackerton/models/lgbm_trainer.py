@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 import os, json
+import logging
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, asdict
@@ -99,6 +100,19 @@ class LGBMTrainer(BaseModel):
                 y_va = y[va_mask]
                 z_tr, z_va = z[tr_mask], z[va_mask]
                 w_tr, w_va = w[tr_mask], w[va_mask]
+                pos_tr = z_tr.sum()
+                pos_va = z_va.sum()
+                if pos_tr == 0 or pos_va == 0:
+                    logging.warning(f"h{h} fold{i}: no positive samples; skipping")
+                    oof_df = dfh.loc[va_mask, ["series_id", "h"]].copy()
+                    oof_df["y"] = y_va
+                    oof_df["prob"] = 0.0
+                    oof_df["reg_pred"] = 0.0
+                    oof_df["yhat"] = 0.0
+                    self.oof_records.extend(oof_df.to_dict("records"))
+                    continue
+                pos_tr_mask = z_tr > 0
+                pos_va_mask = z_va > 0
 
                 if self.use_hurdle:
                     # classifier
@@ -128,15 +142,10 @@ class LGBMTrainer(BaseModel):
                         valid_sets=[dvalid_clf],
                         callbacks=callbacks,
                     )
-                    self.models[h]["clf"].append(clf_booster)
 
                     # regressor on positive samples only
-                    pos_tr = z_tr > 0
-                    pos_va = z_va > 0
-                    if pos_tr.sum() == 0 or pos_va.sum() == 0:
-                        continue
-                    dtrain_reg = lgb.Dataset(X_tr[pos_tr], label=y_tr_f[pos_tr], weight=w_tr[pos_tr], free_raw_data=False)
-                    dvalid_reg = lgb.Dataset(X_va[pos_va], label=y_va_f[pos_va], weight=w_va[pos_va], reference=dtrain_reg, free_raw_data=False)
+                    dtrain_reg = lgb.Dataset(X_tr[pos_tr_mask], label=y_tr_f[pos_tr_mask], weight=w_tr[pos_tr_mask], free_raw_data=False)
+                    dvalid_reg = lgb.Dataset(X_va[pos_va_mask], label=y_va_f[pos_va_mask], weight=w_va[pos_va_mask], reference=dtrain_reg, free_raw_data=False)
 
                     obj = self.params.objective
                     if cfg.use_asinh_target:
@@ -171,6 +180,7 @@ class LGBMTrainer(BaseModel):
                         feval=lambda preds, ds: lgbm_weighted_smape(preds, ds, use_asinh_target=cfg.use_asinh_target),
                         callbacks=callbacks_reg,
                     )
+                    self.models[h]["clf"].append(clf_booster)
                     self.models[h]["reg"].append(reg_booster)
 
                     # OOF prediction for this fold
@@ -255,6 +265,7 @@ class LGBMTrainer(BaseModel):
                 yhat = booster.predict(Xh, num_iteration=booster.best_iteration)
                 reg_list.append(yhat)
             if not reg_list:
+                # no trained model for this horizon; predictions remain 0
                 continue
             reg_mean = np.mean(np.stack(reg_list, axis=0), axis=0)
             if self.use_asinh_target:
