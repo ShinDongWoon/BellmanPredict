@@ -3,9 +3,9 @@
 This module provides helpers to train a binary classifier that distinguishes
 between zero and non-zero demand. The classifier's out-of-fold predictions can
 be combined with regression model outputs (e.g. PatchTST) to form a hurdle
-model. Final predictions are zero when the classifier predicts ``non-zero``
-probability below a threshold and otherwise fall back to the regression
-prediction.
+model. In this project the two components are **multiplied** to obtain final
+predictions ``p * \hat{y}`` where ``p`` is the probability of non-zero demand
+and ``\hat{y}`` is the regression forecast.
 """
 
 from __future__ import annotations
@@ -88,9 +88,13 @@ def predict_zero_probability(models: Iterable[lgb.Booster], X: np.ndarray) -> np
 def combine_with_regression(
     clf_prob: np.ndarray,
     reg_pred: np.ndarray,
-    threshold: float = 0.5,
 ) -> np.ndarray:
     """Combine classifier probabilities and regression predictions.
+
+    The project-wide convention is to multiply the non-zero probability with
+    the regression forecast. This yields smoother behaviour than using a hard
+    threshold and keeps gradients intact when the function is used during
+    optimisation.
 
     Parameters
     ----------
@@ -98,12 +102,14 @@ def combine_with_regression(
         Probability estimates of non-zero demand.
     reg_pred:
         Regression model predictions for the same samples.
-    threshold:
-        Decision threshold for the classifier. Predictions below the threshold
-        are set to ``0``.
+
+    Returns
+    -------
+    np.ndarray
+        Final demand forecasts ``p * \hat{y}`` clipped at zero.
     """
 
-    return np.where(clf_prob >= threshold, reg_pred, 0.0)
+    return np.clip(clf_prob * reg_pred, 0.0, None)
 
 
 __all__ = [

@@ -182,6 +182,8 @@ class LGBMTrainer(BaseModel):
                     yhat = np.clip(prob * reg_pred, 0.0, None)
                     oof_df = dfh.loc[va_mask, ["series_id", "h"]].copy()
                     oof_df["y"] = y_va
+                    oof_df["prob"] = prob
+                    oof_df["reg_pred"] = reg_pred
                     oof_df["yhat"] = yhat
                     self.oof_records.extend(oof_df.to_dict("records"))
                 else:
@@ -268,6 +270,7 @@ class LGBMTrainer(BaseModel):
                     prob_mean = np.mean(np.stack(clf_list, axis=0), axis=0)
                 else:
                     prob_mean = 1.0
+                # combine classifier and regressor via probability multiplication
                 preds[mask] = np.clip(prob_mean * reg_mean, 0.0, None)
             else:
                 preds[mask] = reg_mean

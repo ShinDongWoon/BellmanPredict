@@ -39,6 +39,7 @@ from LGHackerton.config.default import OPTUNA_DIR, TRAIN_PATH, TRAIN_CFG, ARTIFA
 from LGHackerton.preprocess import Preprocessor
 from LGHackerton.models.base_trainer import TrainConfig
 from LGHackerton.models.lgbm_trainer import LGBMParams, LGBMTrainer
+from LGHackerton.models.lightgbm.train import combine_with_regression
 from LGHackerton.utils.metrics import weighted_smape_np
 from LGHackerton.utils.seed import set_seed
 
@@ -301,6 +302,9 @@ def objective_lgbm_hurdle(trial: optuna.Trial) -> float:
 
         oof = trainer.get_oof()
         outlets = oof["series_id"].str.split("::").str[0].values
+        if {"prob", "reg_pred"}.issubset(oof.columns):
+            # ensure the same probability-multiplication logic is used during tuning
+            oof["yhat"] = combine_with_regression(oof["prob"].values, oof["reg_pred"].values)
         score = weighted_smape_np(
             oof["y"].values,
             oof["yhat"].values,
