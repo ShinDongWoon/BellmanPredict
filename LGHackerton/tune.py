@@ -39,7 +39,7 @@ from LGHackerton.config.default import OPTUNA_DIR, TRAIN_PATH, TRAIN_CFG, ARTIFA
 from LGHackerton.preprocess import Preprocessor
 from LGHackerton.models.base_trainer import TrainConfig
 from LGHackerton.models.lgbm_trainer import LGBMParams, LGBMTrainer
-from LGHackerton.models.lightgbm.train import combine_with_regression
+from LGHackerton.utils.hurdle import combine_with_regression
 from LGHackerton.utils.metrics import weighted_smape_np
 from LGHackerton.utils.seed import set_seed
 
