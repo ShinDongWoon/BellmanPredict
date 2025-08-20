@@ -279,7 +279,7 @@ def main():
     args = parser.parse_args()
     try:
         trainer_cls = ModelRegistry.get(args.model)
-    except KeyError as e:
+    except ValueError as e:
         parser.error(str(e))
 
     device = select_device()  # ask user for compute environment

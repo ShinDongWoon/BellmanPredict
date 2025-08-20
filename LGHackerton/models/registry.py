@@ -17,7 +17,9 @@ class ModelRegistry:
             return cls._REGISTRY[name]
         except KeyError as e:  # pragma: no cover - user facing
             available = ", ".join(sorted(cls._REGISTRY))
-            raise KeyError(f"Unknown model '{name}'. Available models: {available}") from e
+            raise ValueError(
+                f"Unknown model '{name}'. Available models: {available}"
+            ) from e
 
     @classmethod
     def available(cls):
