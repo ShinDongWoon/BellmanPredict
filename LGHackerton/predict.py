@@ -24,6 +24,7 @@ from LGHackerton.config.default import (
     ENSEMBLE_CFG,
 )
 from LGHackerton.utils.seed import set_seed
+from src.data.preprocess import inverse_symmetric_transform
 
 def _read_table(path: str) -> pd.DataFrame:
     if path.lower().endswith(".csv"):
@@ -100,7 +101,13 @@ def main():
             df_lgb["yhat_lgbm"].values,
             out.get("yhat_patch").values,
         )
-        out["yhat_ens"] = np.where(out["yhat_patch"].notna(), yhat_ens, df_lgb["yhat_lgbm"].values)
+        use_patch = out["yhat_patch"].notna()
+        # inverse-transform predictions back to original scale; negative values allowed
+        out["yhat_lgbm"] = inverse_symmetric_transform(df_lgb["yhat_lgbm"].values)
+        out["yhat_patch"] = inverse_symmetric_transform(out["yhat_patch"].values)
+        out["yhat_ens"] = inverse_symmetric_transform(
+            np.where(use_patch, yhat_ens, df_lgb["yhat_lgbm"].values)
+        )
 
         prefix = re.search(r"(TEST_\d+)", os.path.basename(path)).group(1)
         out["test_id"] = prefix

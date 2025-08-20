@@ -21,6 +21,7 @@ from typing import Dict, Tuple, Optional, List, Iterable
 
 import numpy as np
 import pandas as pd
+from src.data.preprocess import symmetric_transform
 try:
     from tqdm.auto import tqdm
 except Exception:  # pragma: no cover - tqdm optional
@@ -351,10 +352,14 @@ class CalendarFeatureMaker:
 
 
 class MissingAndOutlierHandler:
-    """
-    - Target NA handling policy for features: ffill(limit=3) then remaining to 0 into SALES_FILLED_COL
+    """Handle missing values and outliers with symmetric transforms.
+
+    - Target NA handling policy for features: ``ffill(limit=3)`` then remaining
+      to 0 into :data:`SALES_FILLED_COL`
     - Outlier capping with per-series thresholds computed from TRAIN only
-      Hampel-like robust cap: min( Q3+1.5*IQR, Q99 )
+      (Hampel-like robust cap: ``min(Q3+1.5*IQR, Q99)``)
+    - Applies an ``arcsinh`` transformation so negative values are preserved
+      rather than clipped to zero
     """
 
     def __init__(self):
@@ -381,15 +386,16 @@ class MissingAndOutlierHandler:
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
         d = df.copy()
 
-        # apply caps
+        # apply caps while preserving negatives
         def cap_series(sid: str, x: pd.Series) -> pd.Series:
             c = self.caps.get(sid, np.nan)
             if np.isnan(c):
                 return x
-            return x.astype(float).clip(lower=0, upper=c)
+            return x.astype(float).clip(upper=c)
 
-
-        d[SALES_COL] = d.groupby(SERIES_COL)[SALES_COL].transform(lambda x: cap_series(x.name, x))
+        d[SALES_COL] = d.groupby(SERIES_COL)[SALES_COL].transform(
+            lambda x: cap_series(x.name, x)
+        )
 
         # filled series for feature calculations
         def fill_series(x: pd.Series) -> pd.Series:
@@ -399,6 +405,10 @@ class MissingAndOutlierHandler:
             return y
 
         d[SALES_FILLED_COL] = d.groupby(SERIES_COL)[SALES_COL].transform(fill_series)
+
+        # symmetric transformation to handle negative values
+        d[SALES_COL] = symmetric_transform(d[SALES_COL])
+        d[SALES_FILLED_COL] = symmetric_transform(d[SALES_FILLED_COL])
         return d
 
 
