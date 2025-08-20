@@ -212,7 +212,13 @@ if TORCH_OK:
             self.proj = nn.Linear(patch_len * input_dim, d_model)
             self.blocks = nn.ModuleList([PatchTSTBlock(d_model, n_heads, dropout) for _ in range(depth)])
             self.norm = nn.LayerNorm(d_model)
-            self.head = nn.Sequential(nn.Linear(d_model, d_model), nn.GELU(), nn.Linear(d_model, H))
+            # separate heads for classification and regression
+            self.reg_head = nn.Sequential(
+                nn.Linear(d_model, d_model), nn.GELU(), nn.Linear(d_model, H)
+            )
+            self.clf_head = nn.Sequential(
+                nn.Linear(d_model, d_model), nn.GELU(), nn.Linear(d_model, H), nn.Sigmoid()
+            )
             if id_embed_dim > 0 and num_series > 0:
                 self.id_embed = nn.Embedding(num_series, id_embed_dim)
                 self.id_proj = nn.Linear(id_embed_dim, d_model) if id_embed_dim != d_model else None
@@ -233,7 +239,9 @@ if TORCH_OK:
             for blk in self.blocks:
                 z = blk(z)
             z = self.norm(z).mean(1)
-            return self.head(z)
+            reg = self.reg_head(z)
+            clf = self.clf_head(z)
+            return clf, reg
 
 class PatchTSTTrainer(BaseModel):
     """Trainer for PatchTST models.
@@ -442,6 +450,7 @@ class PatchTSTTrainer(BaseModel):
             ).to(self.device)
             opt = torch.optim.AdamW(net.parameters(), lr=self.params.lr, weight_decay=self.params.weight_decay)
             loss_fn = build_loss(self.params.loss, alpha=self.params.loss_alpha)
+            bce_fn = nn.BCELoss(reduction="none")
             best=float("inf"); best_state=None; bad=0
             for ep in range(self.params.max_epochs):
                 net.train()
@@ -452,7 +461,11 @@ class PatchTSTTrainer(BaseModel):
                     mu = mu.to(self.device, non_blocking=pin)
                     std = std.to(self.device, non_blocking=pin)
                     opt.zero_grad()
-                    pred = net(xb, sb)
+                    clf_pred, reg_pred = net(xb, sb)
+                    y_raw = yb
+                    if self.params.scaler == "revin":
+                        y_raw = y_raw * std.unsqueeze(1) + mu.unsqueeze(1)
+                    y_bin = (y_raw > 0).float()
                     if cfg.use_weighted_loss:
                         outlets = [self.idx2id[int(i)].split("::")[0] for i in sb.cpu().tolist()]
                         w = torch.tensor(
@@ -460,11 +473,14 @@ class PatchTSTTrainer(BaseModel):
                             device=self.device,
                         ).view(-1, 1)
                         try:
-                            loss = loss_fn(pred, yb, w)
+                            reg_loss = loss_fn(reg_pred, yb, w)
                         except TypeError:  # fallback for loss functions without weight support
-                            loss = (loss_fn(pred, yb) * w).mean()
+                            reg_loss = (loss_fn(reg_pred, yb) * w).mean()
+                        clf_loss = (bce_fn(clf_pred, y_bin) * w).mean()
                     else:
-                        loss = loss_fn(pred, yb)
+                        reg_loss = loss_fn(reg_pred, yb)
+                        clf_loss = bce_fn(clf_pred, y_bin).mean()
+                    loss = reg_loss + clf_loss
                     loss.backward()
                     opt.step()
                 net.eval()
@@ -478,11 +494,12 @@ class PatchTSTTrainer(BaseModel):
                         sb = sb.to(self.device, non_blocking=pin)
                         mu = mu.to(self.device, non_blocking=pin)
                         std = std.to(self.device, non_blocking=pin)
-                        out = net(xb, sb)
+                        prob, out = net(xb, sb)
                         if self.params.scaler == "revin":
                             out = out * std.unsqueeze(1) + mu.unsqueeze(1)
                             yb = yb * std.unsqueeze(1) + mu.unsqueeze(1)
-                        P.append(out.cpu().numpy())
+                        final = prob * out
+                        P.append(final.cpu().numpy())
                         T.append(yb.cpu().numpy())
                         S.extend(sb.cpu().tolist())
                 y_pred = np.clip(np.concatenate(P, 0), 0, None)
@@ -521,11 +538,12 @@ class PatchTSTTrainer(BaseModel):
                     sb = sb.to(self.device, non_blocking=pin)
                     mu = mu.to(self.device, non_blocking=pin)
                     std = std.to(self.device, non_blocking=pin)
-                    out = net(xb, sb)
+                    prob, out = net(xb, sb)
                     if self.params.scaler == "revin":
                         out = out * std.unsqueeze(1) + mu.unsqueeze(1)
                         yb = yb * std.unsqueeze(1) + mu.unsqueeze(1)
-                    P.append(out.cpu().numpy())
+                    final = prob * out
+                    P.append(final.cpu().numpy())
                     Y.append(yb.cpu().numpy())
                     S.extend(sb.cpu().tolist())
             y_pred = np.clip(np.concatenate(P, 0), 0, None)
@@ -560,10 +578,12 @@ class PatchTSTTrainer(BaseModel):
                 sb = sb.to(self.device, non_blocking=pin)
                 mu = mu.to(self.device, non_blocking=pin)
                 std = std.to(self.device, non_blocking=pin)
-                preds = [m(xb, sb).cpu() for m in self.models]
-                out = torch.stack(preds).mean(0)
+                preds = [m(xb, sb) for m in self.models]
+                prob = torch.stack([p[0] for p in preds]).mean(0)
+                reg = torch.stack([p[1] for p in preds]).mean(0)
                 if self.params.scaler == "revin":
-                    out = out * std.unsqueeze(1) + mu.unsqueeze(1)
+                    reg = reg * std.unsqueeze(1) + mu.unsqueeze(1)
+                out = prob * reg
                 outs.append(out.cpu().numpy())
         yhat = np.clip(np.concatenate(outs, 0), 0, None)
         return yhat
