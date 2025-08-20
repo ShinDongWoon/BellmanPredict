@@ -75,7 +75,7 @@ def demo_study(n_trials: int = 20) -> None:
 def run_patchtst_grid_search(cfg_path: str | Path) -> None:
     """Run a simple grid search over PatchTST hyperparameters."""
 
-    from LGHackerton.models.patchtst_trainer import (
+    from LGHackerton.models.patchtst.trainer import (
         PatchTSTParams,
         PatchTSTTrainer,
         TORCH_OK,

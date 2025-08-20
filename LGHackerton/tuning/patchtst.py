@@ -12,7 +12,7 @@ import numpy as np
 import optuna
 
 from LGHackerton.config.default import ARTIFACTS_DIR, PATCH_PARAMS
-from LGHackerton.models.patchtst_trainer import (
+from LGHackerton.models.patchtst.trainer import (
     PatchTSTParams,
     PatchTSTTrainer,
     TORCH_OK,
@@ -145,7 +145,7 @@ class PatchTSTTuner(HyperparameterTuner):
 
         def objective(trial: optuna.Trial) -> float:
             trainer = None
-            import LGHackerton.models.patchtst_trainer as pt
+            import LGHackerton.models.patchtst.trainer as pt
             callback_registered = False
             original_rocv = None
 

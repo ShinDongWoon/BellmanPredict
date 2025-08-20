@@ -6,7 +6,7 @@ Callbacks receive `(seed, fold_idx, train_mask, val_mask, cfg)` and run once
 for every fold.
 
 ```python
-from LGHackerton.models.patchtst_trainer import PatchTSTTrainer
+from LGHackerton.models.patchtst.trainer import PatchTSTTrainer
 
 def log_fold(seed, fold_idx, tr_mask, va_mask, cfg):
     print(f"fold {fold_idx} -> {tr_mask.sum()} train / {va_mask.sum()} val")

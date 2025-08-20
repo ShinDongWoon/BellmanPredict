@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 
-def test_patchtst_pipeline(tmp_path):
+def test_pipeline_patchtst(tmp_path):
     repo_root = Path(__file__).resolve().parents[1]
     workdir = tmp_path / "repo"
     shutil.copytree(
@@ -23,7 +23,7 @@ def test_patchtst_pipeline(tmp_path):
             "\nPATCH_PARAMS['max_epochs']=1\nPATCH_PARAMS['patience']=0\nTRAIN_CFG['n_folds']=1\n"
         )
 
-    pt_path = workdir / "LGHackerton" / "models" / "patchtst_trainer.py"
+    pt_path = workdir / "LGHackerton" / "models" / "patchtst" / "trainer.py"
     orig_pt = pt_path.read_text()
     stub = orig_pt + (
         "\n"

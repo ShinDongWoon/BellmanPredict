@@ -5,7 +5,7 @@ import sys
 # Add project root to sys.path for module imports
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from LGHackerton.models.patchtst_trainer import PatchTSTTrainer, _make_rocv_slices
+from LGHackerton.models.patchtst.trainer import PatchTSTTrainer, _make_rocv_slices
 from LGHackerton.models.base_trainer import TrainConfig
 
 
