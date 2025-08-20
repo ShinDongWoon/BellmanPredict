@@ -147,7 +147,7 @@ def objective_lgbm(trial: optuna.Trial) -> float:
         "verbosity": -1,
         "num_leaves": trial.suggest_int("num_leaves", 31, 255),
         "max_depth": trial.suggest_int("max_depth", -1, 16),
-        "min_data_in_leaf": trial.suggest_int("min_data_in_leaf", 10, 200),
+        # ``min_data_in_leaf`` is suggested later once the training size is known
         "learning_rate": trial.suggest_float("learning_rate", 1e-3, 0.3, log=True),
         "subsample": trial.suggest_float("subsample", 0.5, 1.0),
         "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
@@ -160,6 +160,7 @@ def objective_lgbm(trial: optuna.Trial) -> float:
 
     scores: List[float] = []
     priority_w = TRAIN_CFG.get("priority_weight", 1.0)
+    min_leaf = None
 
     for h in range(1, 8):
         try:
@@ -188,6 +189,14 @@ def objective_lgbm(trial: optuna.Trial) -> float:
             if not np.any(y_tr > 0):
                 logger.warning("h%s: no positive samples; skipping", h)
                 continue
+            if min_leaf is None:
+                n_samples = len(y_tr)
+                upper_bound = max(20, n_samples // 100)  # upper bound scales with data size
+                lower_bound = 10
+                if n_samples < 100:  # allow smaller leaves for tiny datasets
+                    lower_bound = 1
+                min_leaf = trial.suggest_int("min_data_in_leaf", lower_bound, upper_bound)
+                params["min_data_in_leaf"] = min_leaf
 
             X_va = dfh.loc[va_mask, feat_cols].values.astype("float32")
             y_va = dfh.loc[va_mask, "y"].values.astype("float32")
