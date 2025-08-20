@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 import argparse
+import importlib
 import json
 import logging
 import warnings
@@ -34,7 +35,7 @@ from LGHackerton.config.default import (
     SHOW_PROGRESS,
     OPTUNA_DIR,
 )
-from LGHackerton.tuning.patchtst import PatchTSTTuner
+from LGHackerton.tuning import TunerRegistry
 from LGHackerton.utils.seed import set_seed
 
 
@@ -207,11 +208,6 @@ def main(show_progress: bool | None = None):
 
     # Determine PatchTST parameters (may update input length)
     patch_params_dict, patch_input_len = load_best_patch_params()
-    if patch_input_len is not None:
-        pp.windowizer = SampleWindowizer(lookback=patch_input_len, horizon=H)
-
-    X_train, y_train, series_ids, label_dates = pp.build_patch_train(df_full)
-
     cfg = TrainConfig(**TRAIN_CFG)
     cfg.n_trials = args.trials
     cfg.timeout = args.timeout
@@ -219,19 +215,27 @@ def main(show_progress: bool | None = None):
         _patch_patchtst_logging(cfg)
     set_seed(cfg.seed)
 
-    if TORCH_OK and not args.skip_tune and patch_input_len is None:
-        patch_file = Path(OPTUNA_DIR) / "patchtst_best.json"
-        if args.force_tune or not patch_file.exists():
-            tuner = PatchTSTTuner(pp, df_full, cfg)
-            tuner.run(n_trials=cfg.n_trials, force=args.force_tune)
+    if not args.skip_tune:
+        try:
+            tuner_cls = TunerRegistry.get(args.model)
+            tuner = tuner_cls(pp, df_full, cfg)
+            tuned_params = tuner.run(n_trials=cfg.n_trials, force=args.force_tune)
             tuner.best_params()
-        patch_params_dict, patch_input_len = load_best_patch_params()
-        if patch_input_len is not None:
-            pp.windowizer = SampleWindowizer(lookback=patch_input_len, horizon=H)
+            patch_input_len = tuned_params.pop("input_len", patch_input_len)
+            patch_params_dict.update(tuned_params)
+        except ValueError as e:  # pragma: no cover - user facing
+            logging.warning("Tuning skipped: %s", e)
+
+    if patch_input_len is not None:
+        pp.windowizer = SampleWindowizer(lookback=patch_input_len, horizon=H)
+    X_train, y_train, series_ids, label_dates = pp.build_patch_train(df_full)
 
     if TORCH_OK:
         patch_params_dict.pop("input_len", None)
-        patch_params = PatchTSTParams(**patch_params_dict)
+        params_module = importlib.import_module(trainer_cls.__module__)
+        params_cls_name = trainer_cls.__name__.replace("Trainer", "Params")
+        params_cls = getattr(params_module, params_cls_name)
+        patch_params = params_cls(**patch_params_dict)
         L_used = patch_input_len if patch_input_len is not None else L
         pt_tr = trainer_cls(params=patch_params, L=L_used, H=H, model_dir=cfg.model_dir, device=device)
         pt_tr.train(X_train, y_train, series_ids, label_dates, cfg)
