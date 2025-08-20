@@ -8,9 +8,7 @@ import pandas as pd
 import logging
 
 from LGHackerton.preprocess import Preprocessor, L, H
-from LGHackerton.models.lgbm_trainer import LGBMTrainer, LGBMParams
-from LGHackerton.models.patchtst_trainer import PatchTSTTrainer, PatchTSTParams, TORCH_OK
-from LGHackerton.utils.ensemble_manager import EnsembleManager
+from LGHackerton.models.patchtst_trainer import PatchTSTTrainer, PatchTSTParams
 from LGHackerton.utils.device import select_device
 from LGHackerton.config.default import (
     TEST_GLOB,
@@ -18,10 +16,8 @@ from LGHackerton.config.default import (
     LGBM_EVAL_OUT,
     SAMPLE_SUB_PATH,
     SUBMISSION_OUT,
-    LGBM_PARAMS,
     PATCH_PARAMS,
     TRAIN_CFG,
-    ENSEMBLE_CFG,
 )
 from LGHackerton.utils.seed import set_seed
 from src.data.preprocess import inverse_symmetric_transform
@@ -65,16 +61,8 @@ def main():
     cfg = TrainConfig(**TRAIN_CFG)
     set_seed(cfg.seed)
 
-    lgb = LGBMTrainer(params=LGBMParams(**LGBM_PARAMS), features=pp.feature_cols, model_dir=cfg.model_dir, device=device)
-    lgb.load(os.path.join(cfg.model_dir, "lgbm_models.json"))
-
-    pt = None
-    if TORCH_OK and os.path.exists(os.path.join(cfg.model_dir, "patchtst.pt")):
-        pt = PatchTSTTrainer(params=PatchTSTParams(**PATCH_PARAMS), L=L, H=H, model_dir=cfg.model_dir, device=device)
-        pt.load(os.path.join(cfg.model_dir, "patchtst.pt"))
-
-    ens = EnsembleManager()
-    ens.load(os.path.join(cfg.model_dir, "ensemble_meta.json"))
+    pt = PatchTSTTrainer(params=PatchTSTParams(**PATCH_PARAMS), L=L, H=H, model_dir=cfg.model_dir, device=device)
+    pt.load(os.path.join(cfg.model_dir, "patchtst.pt"))
 
     all_outputs = []
 
@@ -82,32 +70,15 @@ def main():
         df_eval_raw = _read_table(path)
         df_eval_full = pp.transform_eval(df_eval_raw)
 
-        lgbm_eval = pp.build_lgbm_eval(df_eval_full)
-        df_lgb = lgb.predict(lgbm_eval)
+        X_eval, sids, _ = pp.build_patch_eval(df_eval_full)
+        sid_idx = np.array([pt.id2idx.get(sid, 0) for sid in sids])
+        y_patch = pt.predict(X_eval, sid_idx)
+        reps = np.repeat(sids, H)
+        hs = np.tile(np.arange(1, H + 1), len(sids))
+        out = pd.DataFrame({"series_id": reps, "h": hs, "yhat_patch": y_patch.reshape(-1)})
 
-        out = df_lgb.copy()
-        if pt is not None:
-            X_eval, sids, _ = pp.build_patch_eval(df_eval_full)
-            sid_idx = np.array([pt.id2idx.get(sid, 0) for sid in sids])
-            y_patch = pt.predict(X_eval, sid_idx)
-            reps = np.repeat(sids, H)
-            hs = np.tile(np.arange(1, H + 1), len(sids))
-            dfp = pd.DataFrame({"series_id": reps, "h": hs, "yhat_patch": y_patch.reshape(-1)})
-            out = out.merge(dfp, on=["series_id", "h"], how="left")
-        else:
-            out["yhat_patch"] = np.nan
-
-        yhat_ens = ens.predict(
-            df_lgb["yhat_lgbm"].values,
-            out.get("yhat_patch").values,
-        )
-        use_patch = out["yhat_patch"].notna()
-        # inverse-transform predictions back to original scale; negative values allowed
-        out["yhat_lgbm"] = inverse_symmetric_transform(df_lgb["yhat_lgbm"].values)
         out["yhat_patch"] = inverse_symmetric_transform(out["yhat_patch"].values)
-        out["yhat_ens"] = inverse_symmetric_transform(
-            np.where(use_patch, yhat_ens, df_lgb["yhat_lgbm"].values)
-        )
+        out["yhat_ens"] = out["yhat_patch"]
 
         prefix = re.search(r"(TEST_\d+)", os.path.basename(path)).group(1)
         out["test_id"] = prefix
