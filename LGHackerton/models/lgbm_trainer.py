@@ -13,6 +13,9 @@ from LGHackerton.utils.metrics import lgbm_weighted_smape
 from LGHackerton.preprocess import L, H
 PRIORITY_OUTLETS = {"담하", "미라시아"}
 
+# holds per-fold debugging context for LightGBM warnings
+CURRENT_DEBUG_INFO: Dict[str, Any] = {}
+
 @dataclass
 class LGBMParams:
     objective: str = "tweedie"       # "tweedie" or "mae"
@@ -158,6 +161,23 @@ class LGBMTrainer(BaseModel):
                             f"h{h} fold{i}: reducing min_data_in_leaf for regressor from {min_leaf_reg} to {pos_tr}"
                         )
                         min_leaf_reg = int(pos_tr)
+                # collect debugging context for custom LightGBM logger
+                zero_var_mask = np.var(X_tr, axis=0, ddof=0) == 0
+                zero_var_feats = [feat_cols[j] for j, flag in enumerate(zero_var_mask) if flag]
+                unique_y = np.unique(y_tr_f).size
+                min_leaf = min(min_leaf_clf, min_leaf_reg)
+                CURRENT_DEBUG_INFO.update(
+                    {
+                        "h": h,
+                        "fold": i,
+                        "n_tr": n_tr,
+                        "zero_var_feats": zero_var_feats,
+                        "unique_y": unique_y,
+                        "min_leaf": min_leaf,
+                    }
+                )
+                if self.use_hurdle:
+                    CURRENT_DEBUG_INFO["pos_tr"] = pos_tr
                 pos_tr_mask = z_tr > 0
                 pos_va_mask = z_va > 0
 
