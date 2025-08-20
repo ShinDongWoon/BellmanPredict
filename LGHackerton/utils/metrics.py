@@ -15,10 +15,15 @@ def smape(y_true: np.ndarray, y_pred: np.ndarray, eps: float = 0.0) -> float:
         return 0.0
     return float(np.mean(np.abs(y_true[mask] - y_pred[mask]) / denom[mask]))
 
-def weighted_smape_np(y_true: np.ndarray, y_pred: np.ndarray,
-                      outlet_names: Optional[Iterable[str]] = None,
-                      priority_weight: float = 3.0,
-                      eps: float = 0.0) -> float:
+def weighted_smape_np(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    outlet_names: Optional[Iterable[str]] = None,
+    priority_weight: float = 3.0,
+    eps: float = 0.0,
+    series_weight_map: Optional[dict[str, float]] = None,
+    series_ids: Optional[Iterable[str]] = None,
+) -> float:
     denom = (np.abs(y_true) + np.abs(y_pred)) / 2.0
     if eps > 0:
         denom = denom + eps
@@ -27,10 +32,19 @@ def weighted_smape_np(y_true: np.ndarray, y_pred: np.ndarray,
         return 0.0
     sm = np.zeros_like(y_true, dtype=float)
     sm[mask] = np.abs(y_true[mask] - y_pred[mask]) / denom[mask]
-    if outlet_names is None:
+    if outlet_names is None and series_weight_map is None:
         return float(np.mean(sm[mask]))
-    outlets = np.asarray(list(outlet_names))
-    w = np.where(np.isin(outlets, list(PRIORITY_OUTLETS)), priority_weight, 1.0).astype(float)
+    w = np.ones_like(y_true, dtype=float)
+    if outlet_names is not None:
+        outlets = np.asarray(list(outlet_names))
+        w = np.where(np.isin(outlets, list(PRIORITY_OUTLETS)), priority_weight, 1.0).astype(float)
+    if series_weight_map is not None:
+        if series_ids is None:
+            raise ValueError("series_ids must be provided when series_weight_map is used")
+        sids = np.asarray(list(series_ids))
+        sw = np.array([series_weight_map.get(sid, 1.0) for sid in sids], dtype=float)
+        sw = np.where(y_true != 0, sw, 1.0)
+        w = w * sw
     w = np.where(mask, w, 0.0)
     if w.sum() <= 0:
         return 0.0

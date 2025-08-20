@@ -341,6 +341,17 @@ class PatchTSTTrainer(BaseModel):
         self.id2idx = {sid:i for i,sid in enumerate(unique_sids)}
         self.idx2id = unique_sids
         series_idx = np.array([self.id2idx[s] for s in series_ids], dtype=np.int64)
+        # compute per-series weights based on zero ratio
+        self.series_weight_map = {}
+        for sid, idx in self.id2idx.items():
+            y_series = y_train[series_idx == idx].ravel()
+            zero_ratio = float(np.mean(y_series == 0)) if y_series.size > 0 else 0.0
+            self.series_weight_map[sid] = cfg.non_zero_weight * (1.0 + zero_ratio)
+        self.series_weight_tensor = torch.tensor(
+            [self.series_weight_map[sid] for sid in self.idx2id],
+            device=self.device,
+            dtype=torch.float32,
+        )
         n = len(label_dates)
         min_samples = max(cfg.min_val_samples, 5 * self.params.batch_size)
         purge_days = cfg.purge_days if cfg.purge_days > 0 else (
@@ -466,20 +477,20 @@ class PatchTSTTrainer(BaseModel):
                     if self.params.scaler == "revin":
                         y_raw = y_raw * std.unsqueeze(1) + mu.unsqueeze(1)
                     y_bin = (y_raw > 0).float()
+                    series_w = self.series_weight_tensor[sb]
+                    w = torch.where(y_raw > 0, series_w.unsqueeze(1), torch.ones_like(yb))
                     if cfg.use_weighted_loss:
                         outlets = [self.idx2id[int(i)].split("::")[0] for i in sb.cpu().tolist()]
-                        w = torch.tensor(
+                        priority_w = torch.tensor(
                             [cfg.priority_weight if o in PRIORITY_OUTLETS else 1.0 for o in outlets],
                             device=self.device,
                         ).view(-1, 1)
-                        try:
-                            reg_loss = loss_fn(reg_pred, yb, w)
-                        except TypeError:  # fallback for loss functions without weight support
-                            reg_loss = (loss_fn(reg_pred, yb) * w).mean()
-                        clf_loss = (bce_fn(clf_pred, y_bin) * w).mean()
-                    else:
-                        reg_loss = loss_fn(reg_pred, yb)
-                        clf_loss = bce_fn(clf_pred, y_bin).mean()
+                        w = w * priority_w
+                    try:
+                        reg_loss = loss_fn(reg_pred, yb, w)
+                    except TypeError:  # fallback for loss functions without weight support
+                        reg_loss = (loss_fn(reg_pred, yb) * w).mean()
+                    clf_loss = (bce_fn(clf_pred, y_bin) * w).mean()
                     loss = reg_loss + clf_loss
                     loss.backward()
                     opt.step()
@@ -513,6 +524,8 @@ class PatchTSTTrainer(BaseModel):
                     np.repeat(outlets, self.H),
                     cfg.priority_weight,
                     eps,
+                    series_weight_map=self.series_weight_map,
+                    series_ids=np.repeat(series_ids_val, self.H),
                 )
                 s_val = smape(y_true.ravel(), y_pred.ravel(), eps)
                 mae_val = float(np.mean(np.abs(y_true - y_pred)))
