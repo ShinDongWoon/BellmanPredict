@@ -5,7 +5,6 @@ import glob
 import re
 import numpy as np
 import pandas as pd
-import logging
 import argparse
 
 from LGHackerton.preprocess import Preprocessor, L, H
@@ -16,13 +15,13 @@ from LGHackerton.config.default import (
     TEST_GLOB,
     ARTIFACTS_PATH,
     PATCH_PRED_OUT,
-    SAMPLE_SUB_PATH,
     SUBMISSION_OUT,
     PATCH_PARAMS,
     TRAIN_CFG,
 )
 from LGHackerton.utils.seed import set_seed
 from src.data.preprocess import inverse_symmetric_transform
+from LGHackerton.postprocess.convert import convert_to_submission
 
 def _read_table(path: str) -> pd.DataFrame:
     if path.lower().endswith(".csv"):
@@ -31,28 +30,6 @@ def _read_table(path: str) -> pd.DataFrame:
         return pd.read_excel(path)
     raise ValueError("Unsupported file type. Use .csv or .xlsx")
 
-
-def convert_to_submission(pred_df: pd.DataFrame, sample_path: str) -> pd.DataFrame:
-    sample_df = _read_table(sample_path)
-
-    pred_df = pred_df.copy()
-    pred_df["series_id"] = pred_df["series_id"].str.replace("::", "_", n=1)
-
-    wide = pred_df.pivot(index="date", columns="series_id", values="yhat_ens")
-    wide = wide.reindex(sample_df.iloc[:, 0]).reindex(columns=sample_df.columns[1:], fill_value=0.0)
-
-    missing_dates = set(sample_df.iloc[:, 0]) - set(pred_df["date"])
-    missing_cols = set(sample_df.columns[1:]) - set(pred_df["series_id"].unique())
-
-    if missing_dates:
-        logging.warning("Missing dates in predictions: %s", sorted(missing_dates))
-    if missing_cols:
-        logging.warning("Missing columns in predictions: %s", sorted(missing_cols))
-
-    out_df = sample_df.copy()
-    out_df.iloc[:, 1:] = wide.to_numpy()
-    assert list(out_df.columns) == list(sample_df.columns)
-    return out_df
 
 def main():
     parser = argparse.ArgumentParser()
@@ -100,7 +77,7 @@ def main():
     all_pred = pd.concat(all_outputs, ignore_index=True)
     all_pred.to_csv(PATCH_PRED_OUT, index=False, encoding="utf-8-sig")
 
-    submission_df = convert_to_submission(all_pred, SAMPLE_SUB_PATH)
+    submission_df = convert_to_submission(all_pred)
     submission_df.to_csv(SUBMISSION_OUT, index=False, encoding="utf-8-sig")
 
 if __name__ == "__main__":

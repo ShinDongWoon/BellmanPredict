@@ -11,10 +11,10 @@ import numpy as np
 from dataclasses import asdict
 from datetime import datetime
 
-from LGHackerton.preprocess import Preprocessor, DATE_COL, SERIES_COL, SALES_COL, L, H
+from LGHackerton.preprocess import Preprocessor, L, H
 from LGHackerton.preprocess.preprocess_pipeline_v1_1 import SampleWindowizer
 from LGHackerton.models.base_trainer import TrainConfig
-from LGHackerton.models.patchtst.trainer import PatchTSTParams, PatchTSTTrainer, TORCH_OK
+from LGHackerton.models.patchtst.trainer import PatchTSTTrainer, TORCH_OK
 from LGHackerton.models import ModelRegistry
 from LGHackerton.utils.device import select_device
 from LGHackerton.utils.diagnostics import (
@@ -179,6 +179,93 @@ def report_oof_metrics(oof_df, model_name: str) -> None:
         logging.info("%s %s: %s", model_name, name, value)
 
 
+def run_preprocess(show_progress: bool) -> tuple[Preprocessor, pd.DataFrame]:
+    """Run preprocessing and return the fitted preprocessor and full dataframe."""
+    df_train_raw = _read_table(TRAIN_PATH)
+    pp = Preprocessor(show_progress=show_progress)
+    df_full = pp.fit_transform_train(df_train_raw)
+    pp.save(ARTIFACTS_PATH)
+    return pp, df_full
+
+
+def run_tuning(
+    model_name: str,
+    pp: Preprocessor,
+    df_full: pd.DataFrame,
+    cfg: TrainConfig,
+    patch_params: dict,
+    patch_input_len: int | None,
+    skip_tune: bool,
+    force_tune: bool,
+) -> tuple[dict, int | None]:
+    """Optionally run hyperparameter tuning and update PatchTST params."""
+    if skip_tune:
+        return patch_params, patch_input_len
+    try:
+        tuner_cls = TunerRegistry.get(model_name)
+    except ValueError:  # pragma: no cover - user facing
+        logging.warning("Unknown tuner for model")
+        return patch_params, patch_input_len
+    tuner = tuner_cls(pp, df_full, cfg)
+    tuned = tuner.run(n_trials=cfg.n_trials, force=force_tune)
+    patch_input_len = tuned.pop("input_len", patch_input_len)
+    patch_params.update(tuned)
+    return patch_params, patch_input_len
+
+
+def run_training(
+    trainer_cls,
+    pp: Preprocessor,
+    df_full: pd.DataFrame,
+    cfg: TrainConfig,
+    patch_params: dict,
+    patch_input_len: int | None,
+    device: str,
+) -> pd.DataFrame:
+    """Train model and return out-of-fold predictions."""
+    if patch_input_len is not None:
+        pp.windowizer = SampleWindowizer(lookback=patch_input_len, horizon=H)
+    X_train, y_train, series_ids, label_dates = pp.build_patch_train(df_full)
+    if not TORCH_OK:
+        raise RuntimeError("PyTorch is not available")
+    patch_params.pop("input_len", None)
+    params_module = importlib.import_module(trainer_cls.__module__)
+    params_cls_name = trainer_cls.__name__.replace("Trainer", "Params")
+    params_cls = getattr(params_module, params_cls_name)
+    patch_params_obj = params_cls(**patch_params)
+    L_used = patch_input_len if patch_input_len is not None else L
+    trainer = trainer_cls(params=patch_params_obj, L=L_used, H=H, model_dir=cfg.model_dir, device=device)
+    trainer.train(X_train, y_train, series_ids, label_dates, cfg)
+    return trainer.get_oof()
+
+
+def run_oof_prediction(oof_df: pd.DataFrame, model_name: str) -> None:
+    """Persist OOF predictions and diagnostics."""
+    oof_df.to_csv(OOF_PATCH_OUT, index=False)
+    report_oof_metrics(oof_df, model_name)
+
+    # diagnostics for PatchTST and similar models
+    try:
+        res_p = oof_df["y"] - oof_df["yhat"]
+        diag_dir = ARTIFACTS_DIR / "diagnostics" / model_name / "oof"
+        diag_dir.mkdir(parents=True, exist_ok=True)
+        acf_df = compute_acf(res_p)
+        pacf_df = compute_pacf(res_p)
+        lb_df, res_used = ljung_box_test(res_p, lags=[10, 20, 30], return_residuals=True)
+        wt_df = white_test(res_p)
+        acf_df.to_csv(diag_dir / "acf.csv", index=False)
+        pacf_df.to_csv(diag_dir / "pacf.csv", index=False)
+        lb_df.to_csv(diag_dir / "ljung_box.csv", index=False)
+        res_used.rename("residual").to_csv(diag_dir / "ljung_box_input.csv", index=False)
+        wt_df.to_csv(diag_dir / "white_test.csv", index=False)
+        plot_residuals(res_p, diag_dir)
+        logging.info("%s Ljung-Box p-values: %s", model_name, lb_df["pvalue"].tolist())
+        logging.info("%s Ljung-Box residual sample: %s", model_name, res_used.head().tolist())
+        logging.info("%s White test p-value: %s", model_name, wt_df["lm_pvalue"].iloc[0])
+    except Exception as e:  # pragma: no cover - best effort
+        logging.warning("%s diagnostics failed: %s", model_name, e)
+
+
 def main(show_progress: bool | None = None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--progress", dest="show_progress", action="store_true", help="show preprocessing progress")
@@ -201,12 +288,8 @@ def main(show_progress: bool | None = None):
 
     device = select_device()  # ask user for compute environment
 
-    df_train_raw = _read_table(TRAIN_PATH)
-    pp = Preprocessor(show_progress=show_progress)
-    df_full = pp.fit_transform_train(df_train_raw)
-    pp.save(ARTIFACTS_PATH)
+    pp, df_full = run_preprocess(show_progress)
 
-    # Determine PatchTST parameters (may update input length)
     patch_params_dict, patch_input_len = load_best_patch_params()
     cfg = TrainConfig(**TRAIN_CFG)
     cfg.n_trials = args.trials
@@ -215,63 +298,14 @@ def main(show_progress: bool | None = None):
         _patch_patchtst_logging(cfg)
     set_seed(cfg.seed)
 
-    if not args.skip_tune:
-        try:
-            tuner_cls = TunerRegistry.get(args.model)
-        except ValueError:  # pragma: no cover - user facing
-            logging.warning("Unknown tuner for model")
-        else:
-            tuner = tuner_cls(pp, df_full, cfg)
-            tuned_params = tuner.run(n_trials=cfg.n_trials, force=args.force_tune)
-            patch_input_len = tuned_params.pop("input_len", patch_input_len)
-            patch_params_dict.update(tuned_params)
+    patch_params_dict, patch_input_len = run_tuning(
+        args.model, pp, df_full, cfg, patch_params_dict, patch_input_len, args.skip_tune, args.force_tune
+    )
 
-    if patch_input_len is not None:
-        pp.windowizer = SampleWindowizer(lookback=patch_input_len, horizon=H)
-    X_train, y_train, series_ids, label_dates = pp.build_patch_train(df_full)
-
-    if TORCH_OK:
-        patch_params_dict.pop("input_len", None)
-        params_module = importlib.import_module(trainer_cls.__module__)
-        params_cls_name = trainer_cls.__name__.replace("Trainer", "Params")
-        params_cls = getattr(params_module, params_cls_name)
-        patch_params = params_cls(**patch_params_dict)
-        L_used = patch_input_len if patch_input_len is not None else L
-        pt_tr = trainer_cls(params=patch_params, L=L_used, H=H, model_dir=cfg.model_dir, device=device)
-        pt_tr.train(X_train, y_train, series_ids, label_dates, cfg)
-        oof_patch = pt_tr.get_oof()
-        oof_patch.to_csv(OOF_PATCH_OUT, index=False)
-        report_oof_metrics(oof_patch, "PatchTST")
-
-        # diagnostics for PatchTST
-        try:
-            res_p = oof_patch["y"] - oof_patch["yhat"]
-            diag_dir = ARTIFACTS_DIR / "diagnostics" / "patchtst" / "oof"
-            diag_dir.mkdir(parents=True, exist_ok=True)
-            acf_df = compute_acf(res_p)
-            pacf_df = compute_pacf(res_p)
-            lb_df, res_used = ljung_box_test(
-                res_p, lags=[10, 20, 30], return_residuals=True
-            )
-            wt_df = white_test(res_p)
-            acf_df.to_csv(diag_dir / "acf.csv", index=False)
-            pacf_df.to_csv(diag_dir / "pacf.csv", index=False)
-            lb_df.to_csv(diag_dir / "ljung_box.csv", index=False)
-            res_used.rename("residual").to_csv(
-                diag_dir / "ljung_box_input.csv", index=False
-            )
-            wt_df.to_csv(diag_dir / "white_test.csv", index=False)
-            plot_residuals(res_p, diag_dir)
-            logging.info("PatchTST Ljung-Box p-values: %s", lb_df["pvalue"].tolist())
-            logging.info(
-                "PatchTST Ljung-Box residual sample: %s",
-                res_used.head().tolist(),
-            )
-            logging.info(
-                "PatchTST White test p-value: %s", wt_df["lm_pvalue"].iloc[0]
-            )
-        except Exception as e:  # pragma: no cover - best effort
-            logging.warning("PatchTST diagnostics failed: %s", e)
+    oof_df = run_training(
+        trainer_cls, pp, df_full, cfg, patch_params_dict, patch_input_len, device
+    )
+    run_oof_prediction(oof_df, args.model)
 
 if __name__ == "__main__":
     main()
