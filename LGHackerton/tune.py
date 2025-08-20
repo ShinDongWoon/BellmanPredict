@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 # simple demo objective (kept for backward compatibility)
 # ---------------------------------------------------------------------------
 
+
 def objective(trial: optuna.Trial) -> float:
     """Simple objective function for demonstration purposes."""
 
@@ -90,7 +91,14 @@ TRIAL_LOG_PATH = OPTUNA_DIR / "lgbm_trials.json"
 MIN_SAMPLES_PER_HORIZON = 100
 
 
-def _log_fold_start(prefix: str, seed: int, fold_name: str, tr_mask: np.ndarray, va_mask: np.ndarray, cfg: TrainConfig) -> None:
+def _log_fold_start(
+    prefix: str,
+    seed: int,
+    fold_name: str,
+    tr_mask: np.ndarray,
+    va_mask: np.ndarray,
+    cfg: TrainConfig,
+) -> None:
     """Persist fold information for a trial to artifacts directory."""
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -266,12 +274,17 @@ def objective_lgbm(trial: optuna.Trial) -> float:
                 )
                 fold_params.pop("early_stopping_rounds")
 
-            def wsmape_eval(preds: np.ndarray, dataset: lgb.Dataset) -> Tuple[str, float, bool]:
+            def wsmape_eval(
+                preds: np.ndarray, dataset: lgb.Dataset
+            ) -> Tuple[str, float, bool]:
                 return (
                     "wSMAPE",
                     float(
                         weighted_smape_np(
-                            dataset.get_label(), preds, outlets, priority_weight=priority_w
+                            dataset.get_label(),
+                            preds,
+                            outlets,
+                            priority_weight=priority_w,
                         )
                     ),
                     False,
@@ -308,7 +321,12 @@ def objective_lgbm(trial: optuna.Trial) -> float:
 
     final_score = float(np.mean(scores)) if scores else float("inf")
     _log_trial({"number": trial.number, "value": final_score, "params": trial.params})
-    logger.info("Trial %d completed score=%.5f params=%s", trial.number, final_score, trial.params)
+    logger.info(
+        "Trial %d completed score=%.5f params=%s",
+        trial.number,
+        final_score,
+        trial.params,
+    )
 
     gc.collect()
     if torch and torch.cuda.is_available():  # pragma: no cover - GPU only
@@ -321,11 +339,28 @@ def objective_lgbm_hurdle(trial: optuna.Trial) -> float:
     """Train :class:`LGBMTrainer` with hurdle option and evaluate wSMAPE."""
 
     df, feat_cols = _prepare_lgbm_train()
+    h_pos_counts = df[df["y"] > 0].groupby("h").size()
+
+    cfg_dict = dict(TRAIN_CFG)
+    cfg_dict["use_hurdle"] = True
+    cfg = TrainConfig(**cfg_dict)
+    cfg.n_folds = min(getattr(cfg, "n_folds", 3), 2)
+    cfg.cv_stride = min(getattr(cfg, "cv_stride", 7), 7)
+    set_seed(cfg.seed)
+
+    fold_ratio = (cfg.n_folds - 1) / cfg.n_folds if cfg.n_folds > 1 else 1.0
+    min_pos_train = (
+        max(int(h_pos_counts.min() * fold_ratio), 1) if not h_pos_counts.empty else 1
+    )
+    lower_bound = max(1, min(20, int(min_pos_train * 0.01)))
+    upper_bound = max(lower_bound, min(20, int(min_pos_train * 0.1)))
 
     params = LGBMParams(
         num_leaves=trial.suggest_int("num_leaves", 31, 255),
         max_depth=trial.suggest_int("max_depth", -1, 16),
-        min_data_in_leaf=trial.suggest_int("min_data_in_leaf", 10, 200),
+        min_data_in_leaf=trial.suggest_int(
+            "min_data_in_leaf", lower_bound, upper_bound
+        ),
         learning_rate=trial.suggest_float("learning_rate", 1e-3, 0.3, log=True),
         subsample=trial.suggest_float("subsample", 0.5, 1.0),
         colsample_bytree=trial.suggest_float("colsample_bytree", 0.5, 1.0),
@@ -338,13 +373,6 @@ def objective_lgbm_hurdle(trial: optuna.Trial) -> float:
 
     device = "cuda" if torch and torch.cuda.is_available() else "cpu"
 
-    cfg_dict = dict(TRAIN_CFG)
-    cfg_dict["use_hurdle"] = True
-    cfg = TrainConfig(**cfg_dict)
-    cfg.n_folds = min(getattr(cfg, "n_folds", 3), 2)
-    cfg.cv_stride = min(getattr(cfg, "cv_stride", 7), 7)
-    set_seed(cfg.seed)
-
     with tempfile.TemporaryDirectory() as model_dir:
         trainer = LGBMTrainer(params, feat_cols, model_dir, device)
 
@@ -352,7 +380,9 @@ def objective_lgbm_hurdle(trial: optuna.Trial) -> float:
 
         def _logged_cv(self, df_h, cfg_inner, date_col):
             slices = original_make_cv(self, df_h, cfg_inner, date_col)
-            h_val = int(df_h["h"].iloc[0]) if "h" in df_h.columns and not df_h.empty else -1
+            h_val = (
+                int(df_h["h"].iloc[0]) if "h" in df_h.columns and not df_h.empty else -1
+            )
             for i, (tr_mask, va_mask) in enumerate(slices):
                 _log_fold_start(
                     "tune_lgbm",
@@ -374,7 +404,9 @@ def objective_lgbm_hurdle(trial: optuna.Trial) -> float:
         outlets = oof["series_id"].str.split("::").str[0].values
         if {"prob", "reg_pred"}.issubset(oof.columns):
             # ensure the same probability-multiplication logic is used during tuning
-            oof["yhat"] = combine_with_regression(oof["prob"].values, oof["reg_pred"].values)
+            oof["yhat"] = combine_with_regression(
+                oof["prob"].values, oof["reg_pred"].values
+            )
         score = weighted_smape_np(
             oof["y"].values,
             oof["yhat"].values,
@@ -398,7 +430,10 @@ def objective_lgbm_hurdle(trial: optuna.Trial) -> float:
     final_score = float(score)
     _log_trial({"number": trial.number, "value": final_score, "params": trial.params})
     logger.info(
-        "Trial %d completed score=%.5f params=%s", trial.number, final_score, trial.params
+        "Trial %d completed score=%.5f params=%s",
+        trial.number,
+        final_score,
+        trial.params,
     )
 
     gc.collect()
@@ -469,9 +504,13 @@ def tune_lgbm(
         best_trial_num = study.best_trial.number
         fi_df = fi_df[fi_df["trial"] == best_trial_num]
         if not fi_df.empty:
-            fi_agg = fi_df.groupby(["feature", "fold"], as_index=False)["importance"].mean()
+            fi_agg = fi_df.groupby(["feature", "fold"], as_index=False)[
+                "importance"
+            ].mean()
             os.makedirs("artifacts", exist_ok=True)
-            fi_agg.to_csv(Path("artifacts") / "lgbm_feature_importance.csv", index=False)
+            fi_agg.to_csv(
+                Path("artifacts") / "lgbm_feature_importance.csv", index=False
+            )
     _FEATURE_IMPORTANCE.clear()
 
     return study
@@ -571,7 +610,9 @@ def tune_patchtst(pp, df_full, cfg):
                 "dropout": trial.suggest_float("dropout", 0.0, 0.5),
                 "id_embed_dim": trial.suggest_categorical("id_embed_dim", [0, 16]),
                 "lr": trial.suggest_float("lr", 1e-4, 1e-2, log=True),
-                "weight_decay": trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True),
+                "weight_decay": trial.suggest_float(
+                    "weight_decay", 1e-6, 1e-3, log=True
+                ),
                 "batch_size": trial.suggest_categorical("batch_size", [64, 128, 256]),
                 "max_epochs": trial.suggest_int("max_epochs", 50, 200),
                 "patience": trial.suggest_int("patience", 5, 30),
@@ -642,7 +683,11 @@ def tune_patchtst(pp, df_full, cfg):
 def run_patchtst_grid_search(cfg_path: str | Path) -> None:
     """Run a simple grid search over PatchTST hyperparameters."""
 
-    from LGHackerton.models.patchtst_trainer import PatchTSTParams, PatchTSTTrainer, TORCH_OK
+    from LGHackerton.models.patchtst_trainer import (
+        PatchTSTParams,
+        PatchTSTTrainer,
+        TORCH_OK,
+    )
     from LGHackerton.preprocess import H
     from LGHackerton.preprocess.preprocess_pipeline_v1_1 import SampleWindowizer
 
@@ -680,8 +725,12 @@ def run_patchtst_grid_search(cfg_path: str | Path) -> None:
                 continue
             try:
                 set_seed(42)
-                params = PatchTSTParams(patch_len=patch, stride=patch, lr=lr, scaler=scaler)
-                trainer = PatchTSTTrainer(params=params, L=inp, H=H, model_dir=cfg.model_dir, device=device)
+                params = PatchTSTParams(
+                    patch_len=patch, stride=patch, lr=lr, scaler=scaler
+                )
+                trainer = PatchTSTTrainer(
+                    params=params, L=inp, H=H, model_dir=cfg.model_dir, device=device
+                )
                 trainer.train(X, y, series_ids, label_dates, cfg)
                 oof = trainer.get_oof()
                 outlets = oof["series_id"].str.split("::").str[0].values
@@ -739,14 +788,24 @@ def main() -> None:  # pragma: no cover - CLI entry point
 
     parser = argparse.ArgumentParser(description="Hyperparameter tuning utilities")
     parser.add_argument("--task", type=str, default=None, help="special task to run")
-    parser.add_argument("--config", type=str, default="configs/baseline.yaml", help="config path")
-    parser.add_argument("--lgbm", action="store_true", help="tune LightGBM hyperparameters")
-    parser.add_argument("--patch", action="store_true", help="tune PatchTST hyperparameters")
-    parser.add_argument("--n-trials", type=int, default=30, help="number of Optuna trials")
+    parser.add_argument(
+        "--config", type=str, default="configs/baseline.yaml", help="config path"
+    )
+    parser.add_argument(
+        "--lgbm", action="store_true", help="tune LightGBM hyperparameters"
+    )
+    parser.add_argument(
+        "--patch", action="store_true", help="tune PatchTST hyperparameters"
+    )
+    parser.add_argument(
+        "--n-trials", type=int, default=30, help="number of Optuna trials"
+    )
     parser.add_argument(
         "--search", choices=["random", "bayes"], default="bayes", help="sampler type"
     )
-    parser.add_argument("--timeout", type=int, default=None, help="time limit for tuning in seconds")
+    parser.add_argument(
+        "--timeout", type=int, default=None, help="time limit for tuning in seconds"
+    )
     args = parser.parse_args()
 
     if args.task == "patchtst_grid":
@@ -773,4 +832,3 @@ def main() -> None:  # pragma: no cover - CLI entry point
 
 if __name__ == "__main__":  # pragma: no cover - script entry point
     main()
-
