@@ -41,6 +41,7 @@ PATCH_PARAMS = dict(
     id_embed_dim=16,
     lr=1e-3, weight_decay=1e-4, batch_size=256,
     max_epochs=200, patience=20,
+    num_workers=0,
 )
 TRAIN_CFG = dict(
     seed=42, n_folds=3, cv_stride=7,
