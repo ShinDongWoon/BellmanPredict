@@ -239,7 +239,7 @@ def objective_lgbm(trial: optuna.Trial) -> float:
 
             n_samples = len(y_tr)
             lower_bound = max(int(n_samples * 0.01), 1)
-            upper_bound = min(int(n_samples * 0.10), 50)
+            upper_bound = min(int(n_samples * 0.10), 20)
             if upper_bound < lower_bound:
                 upper_bound = lower_bound
 
