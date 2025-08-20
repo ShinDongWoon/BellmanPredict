@@ -13,7 +13,7 @@ from LGHackerton.utils.device import select_device
 from LGHackerton.config.default import (
     TEST_GLOB,
     ARTIFACTS_PATH,
-    LGBM_EVAL_OUT,
+    PATCH_PRED_OUT,
     SAMPLE_SUB_PATH,
     SUBMISSION_OUT,
     PATCH_PARAMS,
@@ -85,9 +85,9 @@ def main():
         out["date"] = out["h"].map(lambda h: f"{prefix}+{h}일")
         all_outputs.append(out)
 
-    os.makedirs(os.path.dirname(LGBM_EVAL_OUT), exist_ok=True)
+    os.makedirs(os.path.dirname(PATCH_PRED_OUT), exist_ok=True)
     all_pred = pd.concat(all_outputs, ignore_index=True)
-    all_pred.to_csv(LGBM_EVAL_OUT, index=False, encoding="utf-8-sig")
+    all_pred.to_csv(PATCH_PRED_OUT, index=False, encoding="utf-8-sig")
 
     submission_df = convert_to_submission(all_pred, SAMPLE_SUB_PATH)
     submission_df.to_csv(SUBMISSION_OUT, index=False, encoding="utf-8-sig")
