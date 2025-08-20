@@ -79,3 +79,11 @@ def test_pipeline_patchtst(tmp_path):
     sample_df = pd.read_csv(workdir / "LGHackerton" / "data" / "sample_submission.csv")
     assert list(sub_df.columns) == list(sample_df.columns)
     assert len(sub_df) == len(sample_df)
+
+    # Verify aggregation logic matches saved submission
+    sys.path.insert(0, str(workdir))
+    from LGHackerton.postprocess import aggregate_predictions, convert_to_submission  # noqa
+
+    pred_df = pd.read_csv(artifacts_dir / "eval_patch.csv")
+    recon = convert_to_submission(aggregate_predictions([pred_df]))
+    pd.testing.assert_frame_equal(sub_df, recon)
