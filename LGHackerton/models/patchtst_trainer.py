@@ -116,20 +116,27 @@ class _SeriesDataset(Dataset):
         self.sids = np.array(list(series_ids), dtype=np.int64)
         self.scaler = scaler
 
+        # Pre-compute mean and std for each sample's base series (first channel)
+        base = self.X[:, :, 0]
+        mu = base.mean(axis=1)
+        std = base.std(axis=1)
+        std[std == 0] = 1.0
+        self.mu = mu.astype(np.float32)
+        self.std = std.astype(np.float32)
+
     def __len__(self):
         return self.X.shape[0]
 
     def __getitem__(self, idx):
         x = self.X[idx].copy()
         base = x[:, 0]
-        mu = base.mean(); std = base.std()
-        if std == 0:
-            std = 1.0
+        mu = np.float32(self.mu[idx])
+        std = np.float32(self.std[idx])
         x[:, 0] = (base - mu) / std
         y = self.y[idx]
         if self.scaler == "revin":
             y = (y - mu) / std
-        return x, y, int(self.sids[idx]), np.float32(mu), np.float32(std)
+        return x, y, int(self.sids[idx]), mu, std
 
 
 def _make_rocv_slices(
