@@ -24,27 +24,17 @@ OPTUNA_DIR.mkdir(parents=True, exist_ok=True)
 # 모델/피처 산출물 경로
 MODEL_DIR       = str((ARTIFACTS_DIR / "models").resolve())
 ARTIFACTS_PATH  = str((ARTIFACTS_DIR / "preprocess_artifacts.pkl").resolve())
-LGBM_EVAL_OUT   = str((ARTIFACTS_DIR / "eval_lgbm.csv").resolve())
 SUBMISSION_OUT  = str((ARTIFACTS_DIR / "submission.csv").resolve())
 # PatchTST는 prefix를 요구하므로 확장자 없이 파일명만 제공
 PATCH_EVAL_OUT  = str((ARTIFACTS_DIR / "patch_eval").resolve())
 # PatchTST 예측 결과 저장 경로
 PATCH_PRED_OUT  = str((ARTIFACTS_DIR / "eval_patch.csv").resolve())
-OOF_LGBM_OUT  = str((ARTIFACTS_DIR / "oof_lgbm.csv").resolve())
 OOF_PATCH_OUT = str((ARTIFACTS_DIR / "oof_patch.csv").resolve())
 
 # preprocessing options
 SHOW_PROGRESS = True
 
 # 하이퍼파라미터(필요 시 그대로 유지)
-LGBM_PARAMS = dict(
-    objective="tweedie",
-    tweedie_variance_power=1.3,
-    num_leaves=63, max_depth=-1, min_data_in_leaf=10,
-    learning_rate=0.05, subsample=0.8, colsample_bytree=0.8,
-    reg_alpha=0.0, reg_lambda=1.0,
-    n_estimators=3000, early_stopping_rounds=200,
-)
 PATCH_PARAMS = dict(
     d_model=128, n_heads=8, depth=4,
     patch_len=4, stride=1, dropout=0.1,
@@ -56,8 +46,6 @@ TRAIN_CFG = dict(
     seed=42, n_folds=3, cv_stride=7,
     priority_weight=3.0,
     use_weighted_loss=True,
-    use_asinh_target=False,
-    use_hurdle=False,
     model_dir=MODEL_DIR,
     val_policy="ratio",
     val_ratio=0.2,
@@ -69,8 +57,3 @@ TRAIN_CFG = dict(
     min_val_samples=28,
     purge_mode="L",
 )
-
-ENSEMBLE_CFG = {
-    "type": "nnls",
-    "fallback": "median",
-}
