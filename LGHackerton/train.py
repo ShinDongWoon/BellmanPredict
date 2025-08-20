@@ -10,11 +10,12 @@ import pandas as pd
 import numpy as np
 from dataclasses import asdict
 from datetime import datetime
+import lightgbm as lgb
 
 from LGHackerton.preprocess import Preprocessor, DATE_COL, SERIES_COL, SALES_COL, L, H
 from LGHackerton.preprocess.preprocess_pipeline_v1_1 import SampleWindowizer
 from LGHackerton.models.base_trainer import TrainConfig
-from LGHackerton.models.lgbm_trainer import LGBMParams, LGBMTrainer
+from LGHackerton.models.lgbm_trainer import LGBMParams, LGBMTrainer, CURRENT_DEBUG_INFO
 from LGHackerton.models.patchtst_trainer import PatchTSTParams, PatchTSTTrainer, TORCH_OK
 from LGHackerton.utils.device import select_device
 from LGHackerton.utils.diagnostics import (
@@ -41,6 +42,16 @@ from LGHackerton.config.default import (
 from LGHackerton.tune import tune_lgbm, tune_patchtst
 from LGHackerton.utils.seed import set_seed
 
+
+def _lgb_log_handler(msg: str) -> None:
+    """LightGBM custom logger that augments warnings with debug context."""
+    if "No further splits with positive gain" in msg:
+        info = CURRENT_DEBUG_INFO.copy()
+        logging.warning(
+            f"h{info.get('h')} fold{info.get('fold')}: "
+            f"n_tr={info.get('n_tr')}, zero_var={info.get('zero_var_feats')}, "
+            f"unique_y={info.get('unique_y')}, min_leaf={info.get('min_leaf')}"
+        )
 
 def _log_fold_start(seed: int, fold_idx: int, tr_mask: np.ndarray, va_mask: np.ndarray, cfg: TrainConfig, prefix: str) -> None:
     """Persist fold details to a timestamped JSON file under artifacts."""
@@ -249,6 +260,8 @@ def main(show_progress: bool | None = None):
     _patch_lgbm_logging(cfg)
     _patch_patchtst_logging(cfg)
     set_seed(cfg.seed)
+    CURRENT_DEBUG_INFO.clear()
+    lgb.register_logger(_lgb_log_handler)
     lgb_tr = LGBMTrainer(params=lgb_params, features=pp.feature_cols, model_dir=cfg.model_dir, device=device)
     lgb_tr.train(lgbm_train, cfg)
     oof_lgbm = lgb_tr.get_oof()
