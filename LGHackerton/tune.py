@@ -141,6 +141,10 @@ def objective_lgbm(trial: optuna.Trial) -> float:
     set_seed(cfg.seed)
     df, feat_cols = _prepare_lgbm_train()
 
+    # Maximum number of boosting rounds. Training may stop earlier
+    # due to the early_stopping callback configured below.
+    num_boost_round = trial.suggest_int("num_boost_round", 200, 2000)
+
     params = {
         "objective": "tweedie",
         "metric": "None",
@@ -153,7 +157,6 @@ def objective_lgbm(trial: optuna.Trial) -> float:
         "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
         "reg_alpha": trial.suggest_float("reg_alpha", 1e-8, 10.0, log=True),
         "reg_lambda": trial.suggest_float("reg_lambda", 1e-8, 10.0, log=True),
-        "n_estimators": 200,
         "early_stopping_rounds": 50,
     }
     params["device_type"] = "gpu" if torch and torch.cuda.is_available() else "cpu"
@@ -221,6 +224,7 @@ def objective_lgbm(trial: optuna.Trial) -> float:
             booster = lgb.train(
                 params=fold_params,
                 train_set=dtrain,
+                num_boost_round=num_boost_round,
                 valid_sets=[dvalid],
                 feval=wsmape_eval,
                 callbacks=callbacks,
