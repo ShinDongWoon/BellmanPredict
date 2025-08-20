@@ -55,11 +55,3 @@ This avoids confusion when both grid-search and Optuna artifacts may exist.
 가중치 2.0 이 적용됩니다. 이러한 검증 로직은 불필요한 경고를 줄이고,
 하이퍼파라미터 탐색의 안정성을 높이기 위해 도입되었습니다.
 
-## Skipping LightGBM training
-
-Pass ``--skip-lgbm`` to ``train.py`` to bypass LightGBM tuning, training and diagnostics:
-
-```bash
-python LGHackerton/train.py --skip-lgbm
-```
-

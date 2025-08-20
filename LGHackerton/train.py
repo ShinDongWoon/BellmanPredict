@@ -1,7 +1,6 @@
 
 from __future__ import annotations
 import argparse
-import os
 import json
 import logging
 import warnings
@@ -10,12 +9,10 @@ import pandas as pd
 import numpy as np
 from dataclasses import asdict
 from datetime import datetime
-import lightgbm as lgb
 
 from LGHackerton.preprocess import Preprocessor, DATE_COL, SERIES_COL, SALES_COL, L, H
 from LGHackerton.preprocess.preprocess_pipeline_v1_1 import SampleWindowizer
 from LGHackerton.models.base_trainer import TrainConfig
-from LGHackerton.models.lgbm_trainer import LGBMParams, LGBMTrainer, CURRENT_DEBUG_INFO
 from LGHackerton.models.patchtst_trainer import PatchTSTParams, PatchTSTTrainer, TORCH_OK
 from LGHackerton.utils.device import select_device
 from LGHackerton.utils.diagnostics import (
@@ -29,29 +26,16 @@ from LGHackerton.utils.metrics import compute_oof_metrics
 from LGHackerton.config.default import (
     TRAIN_PATH,
     ARTIFACTS_PATH,
-    LGBM_PARAMS,
     PATCH_PARAMS,
     TRAIN_CFG,
     ARTIFACTS_DIR,
-    ENSEMBLE_CFG,
-    OOF_LGBM_OUT,
     OOF_PATCH_OUT,
     SHOW_PROGRESS,
     OPTUNA_DIR,
 )
-from LGHackerton.tune import tune_lgbm, tune_patchtst
+from LGHackerton.tune import tune_patchtst
 from LGHackerton.utils.seed import set_seed
 
-
-def _lgb_log_handler(msg: str) -> None:
-    """LightGBM custom logger that augments warnings with debug context."""
-    if "No further splits with positive gain" in msg:
-        info = CURRENT_DEBUG_INFO.copy()
-        logging.warning(
-            f"h{info.get('h')} fold{info.get('fold')}: "
-            f"n_tr={info.get('n_tr')}, zero_var={info.get('zero_var_feats')}, "
-            f"unique_y={info.get('unique_y')}, min_leaf={info.get('min_leaf')}"
-        )
 
 def _log_fold_start(seed: int, fold_idx: int, tr_mask: np.ndarray, va_mask: np.ndarray, cfg: TrainConfig, prefix: str) -> None:
     """Persist fold details to a timestamped JSON file under artifacts."""
@@ -67,20 +51,6 @@ def _log_fold_start(seed: int, fold_idx: int, tr_mask: np.ndarray, va_mask: np.n
     out = ARTIFACTS_DIR / f"{prefix}_fold{fold_idx}_{timestamp}.json"
     with out.open("w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-
-
-def _patch_lgbm_logging(cfg: TrainConfig) -> None:
-    """Monkey-patch LGBMTrainer to log fold information."""
-    original = LGBMTrainer._make_cv_slices
-
-    def _wrapped(self, df_h, cfg_inner, date_col):
-        folds = original(self, df_h, cfg_inner, date_col)
-        for i, (tr_mask, va_mask) in enumerate(folds):
-            _log_fold_start(cfg_inner.seed, i, tr_mask, va_mask, cfg_inner, "train_lgbm")
-        return folds
-
-    LGBMTrainer._make_cv_slices = _wrapped
-
 
 def _patch_patchtst_logging(cfg: TrainConfig) -> None:
     """Attach fold logging callbacks to ``PatchTSTTrainer``.
@@ -139,19 +109,6 @@ def _read_table(path: str) -> pd.DataFrame:
     if path.lower().endswith((".xls", ".xlsx")):
         return pd.read_excel(path)
     raise ValueError("Unsupported file type. Use .csv or .xlsx")
-
-
-def load_best_lgbm_params() -> dict:
-    """Load best LightGBM params from Optuna study if available."""
-    study_path = Path(OPTUNA_DIR) / "lgbm_study.json"
-    try:
-        with study_path.open("r", encoding="utf-8") as f:
-            trials = json.load(f)
-        best = min(trials, key=lambda t: t["value"])
-        return {**LGBM_PARAMS, **best["params"]}
-    except Exception as e:  # pragma: no cover - best effort
-        logging.warning("Failed to load LGBM params from %s: %s", study_path, e)
-        return LGBM_PARAMS
 
 
 def load_best_patch_params() -> tuple[dict, int | None]:
@@ -223,7 +180,6 @@ def main(show_progress: bool | None = None):
     parser.add_argument("--force-tune", action="store_true", help="re-run tuning even if artifacts exist")
     parser.add_argument("--trials", type=int, default=20, help="number of Optuna trials")
     parser.add_argument("--timeout", type=int, default=None, help="time limit for tuning (seconds)")
-    parser.add_argument("--skip-lgbm", action="store_true", help="skip LightGBM training")
     parser.set_defaults(show_progress=SHOW_PROGRESS)
 
     args = parser.parse_args()
@@ -242,57 +198,13 @@ def main(show_progress: bool | None = None):
     if patch_input_len is not None:
         pp.windowizer = SampleWindowizer(lookback=patch_input_len, horizon=H)
 
-    if not args.skip_lgbm:
-        lgbm_train = pp.build_lgbm_train(df_full)
     X_train, y_train, series_ids, label_dates = pp.build_patch_train(df_full)
-
-    if not args.skip_lgbm and not args.skip_tune:
-        study_file = Path(OPTUNA_DIR) / "lgbm_study.json"
-        if args.force_tune or not study_file.exists():
-            tune_lgbm(
-                args.trials,
-                args.timeout,
-                train_df=lgbm_train,
-                feature_cols=pp.feature_cols,
-            )
-    if not args.skip_lgbm:
-        lgbm_params_dict = load_best_lgbm_params()
-        lgb_params = LGBMParams(**lgbm_params_dict)
 
     cfg = TrainConfig(**TRAIN_CFG)
     cfg.n_trials = args.trials
     cfg.timeout = args.timeout
-    if not args.skip_lgbm:
-        _patch_lgbm_logging(cfg)
     _patch_patchtst_logging(cfg)
     set_seed(cfg.seed)
-    CURRENT_DEBUG_INFO.clear()
-    if not args.skip_lgbm:
-        lgb.register_logger(_lgb_log_handler)
-        lgb_tr = LGBMTrainer(params=lgb_params, features=pp.feature_cols, model_dir=cfg.model_dir, device=device)
-        lgb_tr.train(lgbm_train, cfg)
-        oof_lgbm = lgb_tr.get_oof()
-        oof_lgbm.to_csv(OOF_LGBM_OUT, index=False)
-        report_oof_metrics(oof_lgbm, "LGBM")
-
-        # diagnostics for LGBM
-        try:
-            res = oof_lgbm["y"] - oof_lgbm["yhat"]
-            diag_dir = ARTIFACTS_DIR / "diagnostics" / "lgbm" / "oof"
-            diag_dir.mkdir(parents=True, exist_ok=True)
-            acf_df = compute_acf(res)
-            pacf_df = compute_pacf(res)
-            lb_df = ljung_box_test(res, lags=[10, 20, 30])
-            wt_df = white_test(res)
-            acf_df.to_csv(diag_dir / "acf.csv", index=False)
-            pacf_df.to_csv(diag_dir / "pacf.csv", index=False)
-            lb_df.to_csv(diag_dir / "ljung_box.csv", index=False)
-            wt_df.to_csv(diag_dir / "white_test.csv", index=False)
-            plot_residuals(res, diag_dir)
-            logging.info("LGBM Ljung-Box p-values: %s", lb_df["pvalue"].tolist())
-            logging.info("LGBM White test p-value: %s", wt_df["lm_pvalue"].iloc[0])
-        except Exception as e:  # pragma: no cover - best effort
-            logging.warning("LGBM diagnostics failed: %s", e)
 
     if TORCH_OK and not args.skip_tune and patch_input_len is None:
         patch_file = Path(OPTUNA_DIR) / "patchtst_best.json"
