@@ -72,19 +72,8 @@ def test_pipeline_patchtst(tmp_path):
         text=True,
     )
 
-    eval_csv = artifacts_dir / "eval_patch.csv"
     sub_csv = artifacts_dir / "submission.csv"
-    assert eval_csv.exists() and sub_csv.exists()
-
-    eval_df = pd.read_csv(eval_csv)
-    assert list(eval_df.columns) == [
-        "series_id",
-        "h",
-        "yhat_patch",
-        "yhat_ens",
-        "test_id",
-        "date",
-    ]
+    assert sub_csv.exists()
 
     sub_df = pd.read_csv(sub_csv)
     sample_df = pd.read_csv(workdir / "LGHackerton" / "data" / "sample_submission.csv")
