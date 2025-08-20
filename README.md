@@ -45,3 +45,25 @@ python LGHackerton/tune.py --task patchtst_grid --config configs/patchtst.yaml
 
 This avoids confusion when both grid-search and Optuna artifacts may exist.
 
+## Combining Predictions
+
+After generating predictions from different models, use the postprocessing
+utilities to ensemble them and create a submission file:
+
+```bash
+python LGHackerton/predict.py --model patchtst --out patch.csv
+python LGHackerton/predict.py --model lgbm --out lgbm.csv
+
+python - <<'PY'
+import pandas as pd
+from LGHackerton.postprocess import aggregate_predictions, convert_to_submission
+
+preds = [pd.read_csv('patch.csv'), pd.read_csv('lgbm.csv')]
+ens = aggregate_predictions(preds, weights=[0.7, 0.3])
+convert_to_submission(ens).to_csv('submission.csv', index=False, encoding='utf-8-sig')
+PY
+```
+
+The helper functions `aggregate_predictions` and `convert_to_submission` ensure
+consistent formatting and handle any missing or duplicate entries.
+

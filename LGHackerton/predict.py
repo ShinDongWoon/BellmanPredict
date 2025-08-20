@@ -21,7 +21,7 @@ from LGHackerton.config.default import (
 )
 from LGHackerton.utils.seed import set_seed
 from src.data.preprocess import inverse_symmetric_transform
-from LGHackerton.postprocess.convert import convert_to_submission
+from LGHackerton.postprocess import aggregate_predictions, convert_to_submission
 
 def _read_table(path: str) -> pd.DataFrame:
     if path.lower().endswith(".csv"):
@@ -52,8 +52,9 @@ def main():
     pt = trainer_cls(params=PatchTSTParams(**PATCH_PARAMS), L=L, H=H, model_dir=cfg.model_dir, device=device)
     pt.load(os.path.join(cfg.model_dir, f"{args.model}.pt"))
 
-    all_outputs = []
+    model_outputs = []
 
+    patch_outputs = []
     for path in sorted(glob.glob(TEST_GLOB)):
         df_eval_raw = _read_table(path)
         df_eval_full = pp.transform_eval(df_eval_raw)
@@ -66,17 +67,24 @@ def main():
         out = pd.DataFrame({"series_id": reps, "h": hs, "yhat_patch": y_patch.reshape(-1)})
 
         out["yhat_patch"] = inverse_symmetric_transform(out["yhat_patch"].values)
-        out["yhat_ens"] = out["yhat_patch"]
 
         prefix = re.search(r"(TEST_\d+)", os.path.basename(path)).group(1)
         out["test_id"] = prefix
         out["date"] = out["h"].map(lambda h: f"{prefix}+{h}일")
-        all_outputs.append(out)
+        patch_outputs.append(out)
+
+    # Combine outputs from all test files for the PatchTST model
+    patch_df = pd.concat(patch_outputs, ignore_index=True)
+    model_outputs.append(patch_df)
+
+    # Example: to ensemble another model, append its dataframe here.
+    # lgbm_df = pd.read_csv("artifacts/eval_lgbm.csv")
+    # model_outputs.append(lgbm_df)
 
     os.makedirs(os.path.dirname(PATCH_PRED_OUT), exist_ok=True)
-    all_pred = pd.concat(all_outputs, ignore_index=True)
-    all_pred.to_csv(PATCH_PRED_OUT, index=False, encoding="utf-8-sig")
+    patch_df.to_csv(PATCH_PRED_OUT, index=False, encoding="utf-8-sig")
 
+    all_pred = aggregate_predictions(model_outputs)
     submission_df = convert_to_submission(all_pred)
     submission_df.to_csv(SUBMISSION_OUT, index=False, encoding="utf-8-sig")
 
