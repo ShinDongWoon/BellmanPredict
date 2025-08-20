@@ -4,9 +4,12 @@ import gc
 from dataclasses import asdict, dataclass
 from typing import Tuple
 
+import json
+import logging
 import optuna
 import numpy as np
 
+from LGHackerton.config.default import ARTIFACTS_DIR
 from LGHackerton.tuning.base import HyperparameterTuner
 from LGHackerton.utils.metrics import weighted_smape_np
 from LGHackerton.utils.seed import set_seed
@@ -70,18 +73,18 @@ class TFTTuner(HyperparameterTuner):
             "max_epochs",
             "patience",
         }
-        missing = required - params.keys()
-        if missing:
-            raise ValueError(f"Missing hyperparameters: {sorted(missing)}")
+        for field in required:
+            if field not in params:
+                raise TypeError(f"Missing field: {field}")
         s = self.search_space
         def _chk_int(name: str, bounds: Tuple[int, int]) -> None:
             val = params.get(name)
             if not isinstance(val, int) or not (bounds[0] <= val <= bounds[1]):
-                raise ValueError(f"{name}={val} outside [{bounds[0]}, {bounds[1]}]")
+                raise ValueError(f"{name} out of range: {val}")
         def _chk_float(name: str, bounds: Tuple[float, float]) -> None:
             val = params.get(name)
             if not isinstance(val, (float, int)) or not (bounds[0] <= float(val) <= bounds[1]):
-                raise ValueError(f"{name}={val} outside [{bounds[0]}, {bounds[1]}]")
+                raise ValueError(f"{name} out of range: {val}")
         _chk_int("hidden_size", s.hidden_size)
         _chk_int("lstm_layers", s.lstm_layers)
         _chk_float("dropout", s.dropout)
@@ -134,8 +137,17 @@ class TFTTuner(HyperparameterTuner):
             return float(score)
 
         study.optimize(objective, n_trials=n_trials)
-        best = dict(study.best_trial.params)
+        try:
+            best = dict(study.best_trial.params)
+        except Exception:
+            logging.warning("Hyperparameter search stopped early; no trials completed")
+            self._best_params = {}
+            return self._best_params
         params = TFTParams(**best)
         self._best_params = asdict(params)
         self.validate_params(self._best_params)
+        out_path = ARTIFACTS_DIR / self.model_name / "best_params.json"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with out_path.open("w", encoding="utf-8") as f:
+            json.dump(self._best_params, f, ensure_ascii=False, indent=2)
         return self._best_params
