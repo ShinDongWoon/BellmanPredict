@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import json
+import logging
 import warnings
 from dataclasses import dataclass, asdict, fields
 from datetime import datetime
@@ -115,11 +116,11 @@ class PatchTSTTuner(HyperparameterTuner):
 
     def validate_params(self, params: dict) -> None:  # type: ignore[override]
         required = {f.name for f in fields(PatchTSTParams)}
-        missing = required - params.keys()
-        if missing:
-            raise ValueError(f"Missing hyperparameters: {sorted(missing)}")
+        for field in required:
+            if field not in params:
+                raise TypeError(f"Missing field: {field}")
         if params.get("patch_len") != params.get("stride"):
-            raise ValueError("stride must equal patch_len")
+            raise ValueError(f"stride out of range: {params.get('stride')}")
 
     def run(self, n_trials: int, force: bool = False) -> dict:  # type: ignore[override]
         """Execute Optuna search over :class:`PatchTSTSearchSpace`.
@@ -260,7 +261,9 @@ class PatchTSTTuner(HyperparameterTuner):
         study.optimize(objective, n_trials=n_trials, timeout=timeout)
 
         if study.best_trial is None:
-            raise RuntimeError("Optuna study finished without any completed trials")
+            logging.warning("Hyperparameter search stopped early; no trials completed")
+            self._best_params = {}
+            return self._best_params
 
         best = dict(study.best_trial.params)
         self.best_input_len = best.pop("input_len", None)
@@ -269,4 +272,8 @@ class PatchTSTTuner(HyperparameterTuner):
         params = PatchTSTParams(**best)
         self._best_params = asdict(params)
         self.validate_params(self._best_params)
+        out_path = ARTIFACTS_DIR / self.model_name / "best_params.json"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with out_path.open("w", encoding="utf-8") as f:
+            json.dump(self._best_params, f, ensure_ascii=False, indent=2)
         return self._best_params

@@ -218,13 +218,13 @@ def main(show_progress: bool | None = None):
     if not args.skip_tune:
         try:
             tuner_cls = TunerRegistry.get(args.model)
+        except ValueError:  # pragma: no cover - user facing
+            logging.warning("Unknown tuner for model")
+        else:
             tuner = tuner_cls(pp, df_full, cfg)
             tuned_params = tuner.run(n_trials=cfg.n_trials, force=args.force_tune)
-            tuner.best_params()
             patch_input_len = tuned_params.pop("input_len", patch_input_len)
             patch_params_dict.update(tuned_params)
-        except ValueError as e:  # pragma: no cover - user facing
-            logging.warning("Tuning skipped: %s", e)
 
     if patch_input_len is not None:
         pp.windowizer = SampleWindowizer(lookback=patch_input_len, horizon=H)

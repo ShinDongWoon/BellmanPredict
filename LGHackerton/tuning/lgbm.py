@@ -4,9 +4,12 @@ import gc
 from dataclasses import asdict, dataclass, fields
 from typing import List, Tuple
 
+import json
+import logging
 import optuna
 import pandas as pd
 
+from LGHackerton.config.default import ARTIFACTS_DIR
 from LGHackerton.models.lgbm_trainer import LGBMParams, LGBMTrainer
 from LGHackerton.tuning.base import HyperparameterTuner
 from LGHackerton.utils.metrics import weighted_smape_np
@@ -54,9 +57,9 @@ class LGBMTuner(HyperparameterTuner):
     # ------------------------------------------------------------------
     def validate_params(self, params: dict) -> None:  # type: ignore[override]
         required = {f.name for f in fields(LGBMParams)}
-        missing = required - params.keys()
-        if missing:
-            raise ValueError(f"Missing hyperparameters: {sorted(missing)}")
+        for field in required:
+            if field not in params:
+                raise TypeError(f"Missing field: {field}")
         s = self.search_space
         int_fields = {
             "num_leaves": s.num_leaves,
@@ -67,7 +70,7 @@ class LGBMTuner(HyperparameterTuner):
         for name, (lo, hi) in int_fields.items():
             val = params.get(name)
             if not isinstance(val, int) or not (lo <= val <= hi):
-                raise ValueError(f"{name}={val} outside [{lo}, {hi}]")
+                raise ValueError(f"{name} out of range: {val}")
         float_fields = {
             "learning_rate": s.learning_rate,
             "subsample": s.subsample,
@@ -78,7 +81,7 @@ class LGBMTuner(HyperparameterTuner):
         for name, (lo, hi) in float_fields.items():
             val = params.get(name)
             if not isinstance(val, (float, int)) or not (lo <= float(val) <= hi):
-                raise ValueError(f"{name}={val} outside [{lo}, {hi}]")
+                raise ValueError(f"{name} out of range: {val}")
 
     def run(self, n_trials: int, force: bool = False) -> dict:  # type: ignore[override]
         df_train, feat_cols = self.prepare_dataset()
@@ -132,8 +135,17 @@ class LGBMTuner(HyperparameterTuner):
             return float(score)
 
         study.optimize(objective, n_trials=n_trials)
-        best = dict(study.best_trial.params)
+        try:
+            best = dict(study.best_trial.params)
+        except Exception:
+            logging.warning("Hyperparameter search stopped early; no trials completed")
+            self._best_params = {}
+            return self._best_params
         params = LGBMParams(**best)
         self._best_params = asdict(params)
         self.validate_params(self._best_params)
+        out_path = ARTIFACTS_DIR / self.model_name / "best_params.json"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with out_path.open("w", encoding="utf-8") as f:
+            json.dump(self._best_params, f, ensure_ascii=False, indent=2)
         return self._best_params
