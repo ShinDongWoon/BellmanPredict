@@ -119,12 +119,11 @@ def build_loss(name: str, alpha: float = 0.5, eps: float = 1e-8, reduction: str 
     raise ValueError(f"Unknown loss '{name}'")
 
 
-def combine_predictions(
-    clf_prob: Tensor,
-    reg_pred: Tensor,
-    threshold: float = 0.5,
-) -> Tensor:
-    """Combine classifier probabilities with regression predictions.
+def combine_predictions(clf_prob: Tensor, reg_pred: Tensor) -> Tensor:
+    """Combine classifier probability with regression output.
+
+    The final demand prediction is obtained by multiplying the probability of
+    non-zero sales with the predicted quantity.
 
     Parameters
     ----------
@@ -133,16 +132,13 @@ def combine_predictions(
         indicate non-zero demand.
     reg_pred:
         Regression model predictions for demand.
-    threshold:
-        Probability threshold above which the regression prediction is used.
 
     Returns
     -------
     Tensor
-        Final demand prediction with zero filtering applied.
+        Final demand prediction after probabilistic gating.
     """
-    decision = clf_prob >= threshold
-    return torch.where(decision, reg_pred, torch.zeros_like(reg_pred))
+    return clf_prob * reg_pred
 
 
 def weighted_smape_oof(
@@ -150,11 +146,8 @@ def weighted_smape_oof(
     clf_prob: Tensor,
     reg_pred: Tensor,
     w: Optional[Tensor] = None,
-    threshold: float = 0.5,
 ) -> Tensor:
     """Compute weighted sMAPE for combined OOF predictions.
-
-    The classifier decides whether to output zero or the regression prediction.
 
     Parameters
     ----------
@@ -166,10 +159,8 @@ def weighted_smape_oof(
         Regression predictions.
     w:
         Optional sample weights.
-    threshold:
-        Decision threshold for ``clf_prob``.
     """
-    final_pred = combine_predictions(clf_prob, reg_pred, threshold=threshold)
+    final_pred = combine_predictions(clf_prob, reg_pred)
     loss_fn = WeightedSMAPELoss(reduction="mean")
     return loss_fn(final_pred, y_true, w=w)
 
