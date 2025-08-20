@@ -167,6 +167,13 @@ def objective_lgbm(trial: optuna.Trial) -> float:
             if dfh.empty:
                 continue
             dfh = dfh.sort_values("date")
+
+            # compute feature variances once to avoid repeated heavy computation
+            feat_var = dfh[feat_cols].var()
+            if (feat_var == 0).all():
+                logger.warning("h%s: all feature variances are zero; skipping", h)
+                continue
+
             dates = dfh["date"].sort_values().unique()
             if len(dates) < 2:
                 continue
@@ -178,6 +185,10 @@ def objective_lgbm(trial: optuna.Trial) -> float:
 
             X_tr = dfh.loc[tr_mask, feat_cols].values.astype("float32")
             y_tr = dfh.loc[tr_mask, "y"].values.astype("float32")
+            if not np.any(y_tr > 0):
+                logger.warning("h%s: no positive samples; skipping", h)
+                continue
+
             X_va = dfh.loc[va_mask, feat_cols].values.astype("float32")
             y_va = dfh.loc[va_mask, "y"].values.astype("float32")
             outlets = dfh.loc[va_mask, "series_id"].str.split("::").str[0].values
