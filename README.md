@@ -45,6 +45,13 @@ python LGHackerton/tune.py --task patchtst_grid --config configs/patchtst.yaml
 
 This avoids confusion when both grid-search and Optuna artifacts may exist.
 
+## Model and Tuner Registry
+
+Training scripts resolve trainer classes and Optuna-based tuners through
+lightweight registries. Providing an unknown name raises a `ValueError` listing
+available options. See [docs/registry_tuner.md](docs/registry_tuner.md) for full
+usage and error-handling rules.
+
 ## Combining Predictions
 
 After generating predictions from different models, use the postprocessing
@@ -66,4 +73,10 @@ PY
 
 The helper functions `aggregate_predictions` and `convert_to_submission` ensure
 consistent formatting and handle any missing or duplicate entries.
+
+## Documentation
+
+- [Callbacks](docs/callbacks.md)
+- [Hyperparameter Tuning](docs/tuning.md)
+- [Model & Tuner Registries](docs/registry_tuner.md)
 
