@@ -14,7 +14,7 @@ from datetime import datetime
 from LGHackerton.preprocess import Preprocessor, DATE_COL, SERIES_COL, SALES_COL, L, H
 from LGHackerton.preprocess.preprocess_pipeline_v1_1 import SampleWindowizer
 from LGHackerton.models.base_trainer import TrainConfig
-from LGHackerton.models.patchtst_trainer import PatchTSTParams, PatchTSTTrainer, TORCH_OK
+from LGHackerton.models.patchtst.trainer import PatchTSTParams, PatchTSTTrainer, TORCH_OK
 from LGHackerton.models import ModelRegistry
 from LGHackerton.utils.device import select_device
 from LGHackerton.utils.diagnostics import (
@@ -73,8 +73,8 @@ def _patch_patchtst_logging(cfg: TrainConfig) -> None:
     """
 
     # Import class and module to inspect available hooks at runtime.
-    from LGHackerton.models.patchtst_trainer import PatchTSTTrainer
-    import LGHackerton.models.patchtst_trainer as pt
+    from LGHackerton.models.patchtst.trainer import PatchTSTTrainer
+    import LGHackerton.models.patchtst.trainer as pt
 
     if hasattr(PatchTSTTrainer, "register_rocv_callback"):
         # Preferred modern API: register a callback that logs each fold.

@@ -25,7 +25,7 @@ class ModelRegistry:
 
 
 # register known trainers
-from LGHackerton.models.patchtst_trainer import PatchTSTTrainer
+from LGHackerton.models.patchtst.trainer import PatchTSTTrainer
 ModelRegistry.register("patchtst", PatchTSTTrainer)
 
 try:  # optional registrations

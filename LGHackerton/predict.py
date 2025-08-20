@@ -10,7 +10,7 @@ import argparse
 
 from LGHackerton.preprocess import Preprocessor, L, H
 from LGHackerton.models import ModelRegistry
-from LGHackerton.models.patchtst_trainer import PatchTSTParams
+from LGHackerton.models.patchtst.trainer import PatchTSTParams
 from LGHackerton.utils.device import select_device
 from LGHackerton.config.default import (
     TEST_GLOB,

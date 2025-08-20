@@ -7,7 +7,7 @@ import pytest
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 from LGHackerton.models.base_trainer import TrainConfig
-import LGHackerton.models.patchtst_trainer as pt
+import LGHackerton.models.patchtst.trainer as pt
 from LGHackerton.train import _patch_patchtst_logging
 
 

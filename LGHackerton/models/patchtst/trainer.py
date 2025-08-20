@@ -16,7 +16,7 @@ except Exception as _e:
 
 from LGHackerton.models.base_trainer import BaseModel, TrainConfig
 from LGHackerton.utils.metrics import smape, weighted_smape_np, PRIORITY_OUTLETS
-from LGHackerton.models.patchtst.train import build_loss
+from .train import build_loss
 
 @dataclass
 class PatchTSTParams:

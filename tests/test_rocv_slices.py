@@ -4,7 +4,7 @@ import sys
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from LGHackerton.models.patchtst_trainer import _make_rocv_slices
+from LGHackerton.models.patchtst.trainer import _make_rocv_slices
 
 
 def test_rocv_validation_spans_are_disjoint():
