@@ -248,8 +248,17 @@ class DateContinuityFixer:
 class CalendarFeatureMaker:
     """Adds calendar features and optional Korean holidays if provider available."""
 
-    def __init__(self, holiday_provider: Optional[HolidayProvider] = None):
+    def __init__(
+        self,
+        holiday_provider: Optional[HolidayProvider] = None,
+        cyclical: bool = False,
+        keep_months: Optional[Iterable[int]] = None,
+        keep_woys: Optional[Iterable[int]] = None,
+    ):
         self.holiday_provider = holiday_provider or HolidayProvider()
+        self.cyclical = cyclical
+        self.keep_months = set(keep_months) if keep_months is not None else None
+        self.keep_woys = set(keep_woys) if keep_woys is not None else None
         self._holiday_cache: set = set()
         self._woy_cols: List[str] = []
         self._month_cols: List[str] = []
@@ -262,6 +271,10 @@ class CalendarFeatureMaker:
         # store columns to align dummies at transform
         weeks = df[DATE_COL].dt.isocalendar().week.unique().tolist()
         months = df[DATE_COL].dt.month.unique().tolist()
+        if self.keep_woys is not None:
+            weeks = [w for w in weeks if w in self.keep_woys]
+        if self.keep_months is not None:
+            months = [m for m in months if m in self.keep_months]
         self._woy_cols = [f"woy_{w}" for w in sorted(weeks)]
         self._month_cols = [f"month_{m}" for m in sorted(months)]
         promo_candidates = [
@@ -270,18 +283,32 @@ class CalendarFeatureMaker:
             if c in df.columns
         ]
         self._promo_col = promo_candidates[0] if promo_candidates else None
-        self._feature_names = [
-            "year",
-            "day",
-            "dow",
-            "is_weekend",
-            "is_month_start",
-            "is_month_end",
-            "is_holiday",
-            "is_priority_outlet",
-            *self._month_cols,
-            *self._woy_cols,
-        ]
+        if self.cyclical:
+            cyc_cols = ["month_sin", "month_cos", "woy_sin", "woy_cos"]
+            self._feature_names = [
+                "year",
+                "day",
+                "dow",
+                "is_weekend",
+                "is_month_start",
+                "is_month_end",
+                "is_holiday",
+                "is_priority_outlet",
+                *cyc_cols,
+            ]
+        else:
+            self._feature_names = [
+                "year",
+                "day",
+                "dow",
+                "is_weekend",
+                "is_month_start",
+                "is_month_end",
+                "is_holiday",
+                "is_priority_outlet",
+                *self._month_cols,
+                *self._woy_cols,
+            ]
         if self._promo_col is not None:
             self._feature_names.append("is_promo")
         return self
@@ -298,11 +325,18 @@ class CalendarFeatureMaker:
         # base calendar categories
         d["month"] = d[DATE_COL].dt.month
         d["weekofyear"] = d[DATE_COL].dt.isocalendar().week.astype(int)
-        month_dum = pd.get_dummies(d["month"], prefix="month", dtype=np.int8)
-        month_dum = month_dum.reindex(columns=self._month_cols, fill_value=0)
-        woy_dum = pd.get_dummies(d["weekofyear"], prefix="woy", dtype=np.int8)
-        woy_dum = woy_dum.reindex(columns=self._woy_cols, fill_value=0)
-        d = pd.concat([d.drop(columns=["month", "weekofyear"]), month_dum, woy_dum], axis=1)
+        if self.cyclical:
+            d["month_sin"] = np.sin(2 * np.pi * d["month"] / 12)
+            d["month_cos"] = np.cos(2 * np.pi * d["month"] / 12)
+            d["woy_sin"] = np.sin(2 * np.pi * d["weekofyear"] / 52)
+            d["woy_cos"] = np.cos(2 * np.pi * d["weekofyear"] / 52)
+            d = d.drop(columns=["month", "weekofyear"])
+        else:
+            month_dum = pd.get_dummies(d["month"], prefix="month", dtype=np.int8)
+            month_dum = month_dum.reindex(columns=self._month_cols, fill_value=0)
+            woy_dum = pd.get_dummies(d["weekofyear"], prefix="woy", dtype=np.int8)
+            woy_dum = woy_dum.reindex(columns=self._woy_cols, fill_value=0)
+            d = pd.concat([d.drop(columns=["month", "weekofyear"]), month_dum, woy_dum], axis=1)
 
         if self._holiday_cache:
             d["is_holiday"] = d[DATE_COL].dt.date.isin(self._holiday_cache).astype(np.int8)
