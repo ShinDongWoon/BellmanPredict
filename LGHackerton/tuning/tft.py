@@ -94,10 +94,18 @@ class TFTTuner(HyperparameterTuner):
         _chk_int("max_epochs", s.max_epochs)
         _chk_int("patience", s.patience)
 
-    def run(self, n_trials: int, force: bool = False) -> dict:  # type: ignore[override]
+    def run(self, n_trials: int, force: bool) -> dict:  # type: ignore[override]
         if TFTTrainer is None or TFTParams is None:
             raise RuntimeError("TFTTrainer not available")
         X, y, series_ids, label_dates = self.prepare_dataset()
+        if not force:
+            cache = self.artifact_dir / "best_params.json"
+            if cache.exists():
+                with cache.open("r", encoding="utf-8") as f:
+                    cached = json.load(f)
+                self.validate_params(cached)
+                self._best_params = cached
+                return cached
         study = optuna.create_study(direction="minimize")
         search = self.search_space
 
@@ -146,8 +154,4 @@ class TFTTuner(HyperparameterTuner):
         params = TFTParams(**best)
         self._best_params = asdict(params)
         self.validate_params(self._best_params)
-        out_path = ARTIFACTS_DIR / self.model_name / "best_params.json"
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        with out_path.open("w", encoding="utf-8") as f:
-            json.dump(self._best_params, f, ensure_ascii=False, indent=2)
-        return self._best_params
+        return self.best_params()

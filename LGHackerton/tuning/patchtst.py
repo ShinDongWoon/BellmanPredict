@@ -122,16 +122,29 @@ class PatchTSTTuner(HyperparameterTuner):
         if params.get("patch_len") != params.get("stride"):
             raise ValueError(f"stride out of range: {params.get('stride')}")
 
-    def run(self, n_trials: int, force: bool = False) -> dict:  # type: ignore[override]
+    def run(self, n_trials: int, force: bool) -> dict:  # type: ignore[override]
         """Execute Optuna search over :class:`PatchTSTSearchSpace`.
+
+        If ``best_params.json`` exists and ``force`` is ``False``, the cached
+        parameters are returned without running the optimisation.
 
         Parameters
         ----------
         n_trials : int
             Number of trials to evaluate.
         force : bool
-            Ignored. Included for interface compatibility.
+            If ``True``, ignore any cached results and rerun the search.
         """
+
+        if not force:
+            cache = self.artifact_dir / "best_params.json"
+            if cache.exists():
+                with cache.open("r", encoding="utf-8") as f:
+                    cached = json.load(f)
+                self.validate_params(cached)
+                self._best_params = cached
+                self.best_input_len = cached.get("input_len")
+                return cached
 
         if not TORCH_OK:
             raise RuntimeError("PyTorch not available for PatchTST")
@@ -271,9 +284,7 @@ class PatchTSTTuner(HyperparameterTuner):
         best["num_workers"] = PATCH_PARAMS.get("num_workers", 0)
         params = PatchTSTParams(**best)
         self._best_params = asdict(params)
+        if self.best_input_len is not None:
+            self._best_params["input_len"] = self.best_input_len
         self.validate_params(self._best_params)
-        out_path = ARTIFACTS_DIR / self.model_name / "best_params.json"
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        with out_path.open("w", encoding="utf-8") as f:
-            json.dump(self._best_params, f, ensure_ascii=False, indent=2)
-        return self._best_params
+        return self.best_params()
