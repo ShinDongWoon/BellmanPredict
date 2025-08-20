@@ -221,6 +221,7 @@ def main(show_progress: bool | None = None):
     parser.add_argument("--force-tune", action="store_true", help="re-run tuning even if artifacts exist")
     parser.add_argument("--trials", type=int, default=20, help="number of Optuna trials")
     parser.add_argument("--timeout", type=int, default=None, help="time limit for tuning (seconds)")
+    parser.add_argument("--skip-lgbm", action="store_true", help="skip LightGBM training")
     parser.set_defaults(show_progress=SHOW_PROGRESS)
 
     args = parser.parse_args()
@@ -239,10 +240,11 @@ def main(show_progress: bool | None = None):
     if patch_input_len is not None:
         pp.windowizer = SampleWindowizer(lookback=patch_input_len, horizon=H)
 
-    lgbm_train = pp.build_lgbm_train(df_full)
+    if not args.skip_lgbm:
+        lgbm_train = pp.build_lgbm_train(df_full)
     X_train, y_train, series_ids, label_dates = pp.build_patch_train(df_full)
 
-    if not args.skip_tune:
+    if not args.skip_lgbm and not args.skip_tune:
         study_file = Path(OPTUNA_DIR) / "lgbm_study.json"
         if args.force_tune or not study_file.exists():
             tune_lgbm(
@@ -251,41 +253,44 @@ def main(show_progress: bool | None = None):
                 train_df=lgbm_train,
                 feature_cols=pp.feature_cols,
             )
-    lgbm_params_dict = load_best_lgbm_params()
-    lgb_params = LGBMParams(**lgbm_params_dict)
+    if not args.skip_lgbm:
+        lgbm_params_dict = load_best_lgbm_params()
+        lgb_params = LGBMParams(**lgbm_params_dict)
 
     cfg = TrainConfig(**TRAIN_CFG)
     cfg.n_trials = args.trials
     cfg.timeout = args.timeout
-    _patch_lgbm_logging(cfg)
+    if not args.skip_lgbm:
+        _patch_lgbm_logging(cfg)
     _patch_patchtst_logging(cfg)
     set_seed(cfg.seed)
     CURRENT_DEBUG_INFO.clear()
-    lgb.register_logger(_lgb_log_handler)
-    lgb_tr = LGBMTrainer(params=lgb_params, features=pp.feature_cols, model_dir=cfg.model_dir, device=device)
-    lgb_tr.train(lgbm_train, cfg)
-    oof_lgbm = lgb_tr.get_oof()
-    oof_lgbm.to_csv(OOF_LGBM_OUT, index=False)
-    report_oof_metrics(oof_lgbm, "LGBM")
+    if not args.skip_lgbm:
+        lgb.register_logger(_lgb_log_handler)
+        lgb_tr = LGBMTrainer(params=lgb_params, features=pp.feature_cols, model_dir=cfg.model_dir, device=device)
+        lgb_tr.train(lgbm_train, cfg)
+        oof_lgbm = lgb_tr.get_oof()
+        oof_lgbm.to_csv(OOF_LGBM_OUT, index=False)
+        report_oof_metrics(oof_lgbm, "LGBM")
 
-    # diagnostics for LGBM
-    try:
-        res = oof_lgbm["y"] - oof_lgbm["yhat"]
-        diag_dir = ARTIFACTS_DIR / "diagnostics" / "lgbm" / "oof"
-        diag_dir.mkdir(parents=True, exist_ok=True)
-        acf_df = compute_acf(res)
-        pacf_df = compute_pacf(res)
-        lb_df = ljung_box_test(res, lags=[10, 20, 30])
-        wt_df = white_test(res)
-        acf_df.to_csv(diag_dir / "acf.csv", index=False)
-        pacf_df.to_csv(diag_dir / "pacf.csv", index=False)
-        lb_df.to_csv(diag_dir / "ljung_box.csv", index=False)
-        wt_df.to_csv(diag_dir / "white_test.csv", index=False)
-        plot_residuals(res, diag_dir)
-        logging.info("LGBM Ljung-Box p-values: %s", lb_df["pvalue"].tolist())
-        logging.info("LGBM White test p-value: %s", wt_df["lm_pvalue"].iloc[0])
-    except Exception as e:  # pragma: no cover - best effort
-        logging.warning("LGBM diagnostics failed: %s", e)
+        # diagnostics for LGBM
+        try:
+            res = oof_lgbm["y"] - oof_lgbm["yhat"]
+            diag_dir = ARTIFACTS_DIR / "diagnostics" / "lgbm" / "oof"
+            diag_dir.mkdir(parents=True, exist_ok=True)
+            acf_df = compute_acf(res)
+            pacf_df = compute_pacf(res)
+            lb_df = ljung_box_test(res, lags=[10, 20, 30])
+            wt_df = white_test(res)
+            acf_df.to_csv(diag_dir / "acf.csv", index=False)
+            pacf_df.to_csv(diag_dir / "pacf.csv", index=False)
+            lb_df.to_csv(diag_dir / "ljung_box.csv", index=False)
+            wt_df.to_csv(diag_dir / "white_test.csv", index=False)
+            plot_residuals(res, diag_dir)
+            logging.info("LGBM Ljung-Box p-values: %s", lb_df["pvalue"].tolist())
+            logging.info("LGBM White test p-value: %s", wt_df["lm_pvalue"].iloc[0])
+        except Exception as e:  # pragma: no cover - best effort
+            logging.warning("LGBM diagnostics failed: %s", e)
 
     if TORCH_OK and not args.skip_tune and patch_input_len is None:
         patch_file = Path(OPTUNA_DIR) / "patchtst_best.json"
