@@ -11,6 +11,7 @@ class TrainConfig:
     cv_stride:int=7
     priority_weight:float=3.0
     use_weighted_loss:bool=False
+    non_zero_weight:float=2.0
     use_asinh_target:bool=False
     use_hurdle:bool=False
     model_dir:str="./artifacts"
