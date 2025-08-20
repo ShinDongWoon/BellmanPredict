@@ -163,7 +163,6 @@ def objective_lgbm(trial: optuna.Trial) -> float:
 
     scores: List[float] = []
     priority_w = TRAIN_CFG.get("priority_weight", 1.0)
-    min_leaf = None
 
     for h in range(1, 8):
         try:
@@ -192,14 +191,19 @@ def objective_lgbm(trial: optuna.Trial) -> float:
             if not np.any(y_tr > 0):
                 logger.warning("h%s: no positive samples; skipping", h)
                 continue
-            if min_leaf is None:
-                n_samples = len(y_tr)
-                upper_bound = max(20, n_samples // 100)  # upper bound scales with data size
-                lower_bound = 10
-                if n_samples < 100:  # allow smaller leaves for tiny datasets
-                    lower_bound = 1
-                min_leaf = trial.suggest_int("min_data_in_leaf", lower_bound, upper_bound)
-                params["min_data_in_leaf"] = min_leaf
+
+            n_samples = len(y_tr)
+            if n_samples <= 1:
+                logger.warning("h%s: insufficient samples; skipping", h)
+                continue
+
+            upper_bound = min(max(20, n_samples // 100), n_samples - 1)
+            lower_bound = 1 if n_samples < 100 else 10
+
+            # optionally tune per horizon by giving each horizon its own parameter name
+            leaf_param = f"min_data_in_leaf_h{h}"
+            min_leaf = trial.suggest_int(leaf_param, lower_bound, upper_bound)
+            params["min_data_in_leaf"] = min_leaf
 
             X_va = dfh.loc[va_mask, feat_cols].values.astype("float32")
             y_va = dfh.loc[va_mask, "y"].values.astype("float32")
