@@ -110,8 +110,11 @@ class LGBMTrainer(BaseModel):
                 y_va = y[va_mask]
                 z_tr, z_va = z[tr_mask], z[va_mask]
                 w_tr, w_va = w[tr_mask], w[va_mask]
-                pos_tr = z_tr.sum()
-                pos_va = z_va.sum()
+
+                n_tr = X_tr.shape[0]
+                pos_tr = int(z_tr.sum())
+                pos_va = int(z_va.sum())
+
                 if pos_tr == 0 or pos_va == 0:
                     logging.warning(f"h{h} fold{i}: no positive samples; skipping")
                     oof_df = dfh.loc[va_mask, ["series_id", "h"]].copy()
@@ -121,19 +124,55 @@ class LGBMTrainer(BaseModel):
                     oof_df["yhat"] = 0.0
                     self.oof_records.extend(oof_df.to_dict("records"))
                     continue
+
+                min_leaf_clf = min_leaf_reg = self.params.min_data_in_leaf
+                if n_tr < 2:
+                    logging.warning(f"h{h} fold{i}: only {n_tr} training samples; skipping")
+                    oof_df = dfh.loc[va_mask, ["series_id", "h"]].copy()
+                    oof_df["y"] = y_va
+                    oof_df["prob"] = 0.0
+                    oof_df["reg_pred"] = 0.0
+                    oof_df["yhat"] = 0.0
+                    self.oof_records.extend(oof_df.to_dict("records"))
+                    continue
+                if min_leaf_clf > n_tr:
+                    logging.warning(
+                        f"h{h} fold{i}: reducing min_data_in_leaf from {min_leaf_clf} to {n_tr}"
+                    )
+                    min_leaf_clf = min_leaf_reg = n_tr
+
+                if self.use_hurdle:
+                    if pos_tr < 2:
+                        logging.warning(
+                            f"h{h} fold{i}: only {pos_tr} positive samples; skipping"
+                        )
+                        oof_df = dfh.loc[va_mask, ["series_id", "h"]].copy()
+                        oof_df["y"] = y_va
+                        oof_df["prob"] = 0.0
+                        oof_df["reg_pred"] = 0.0
+                        oof_df["yhat"] = 0.0
+                        self.oof_records.extend(oof_df.to_dict("records"))
+                        continue
+                    if min_leaf_reg > pos_tr:
+                        logging.warning(
+                            f"h{h} fold{i}: reducing min_data_in_leaf for regressor from {min_leaf_reg} to {pos_tr}"
+                        )
+                        min_leaf_reg = int(pos_tr)
                 pos_tr_mask = z_tr > 0
                 pos_va_mask = z_va > 0
 
                 if self.use_hurdle:
                     # classifier
                     dtrain_clf = lgb.Dataset(X_tr, label=z_tr, weight=w_tr, free_raw_data=False)
-                    dvalid_clf = lgb.Dataset(X_va, label=z_va, weight=w_va, reference=dtrain_clf, free_raw_data=False)
+                    dvalid_clf = lgb.Dataset(
+                        X_va, label=z_va, weight=w_va, reference=dtrain_clf, free_raw_data=False
+                    )
                     clf_params = dict(
                         objective="binary",
                         learning_rate=self.params.learning_rate,
                         num_leaves=self.params.num_leaves,
                         max_depth=self.params.max_depth,
-                        min_data_in_leaf=self.params.min_data_in_leaf,
+                        min_data_in_leaf=min_leaf_clf,
                         subsample=self.params.subsample,
                         colsample_bytree=self.params.colsample_bytree,
                         reg_alpha=self.params.reg_alpha,
@@ -154,8 +193,19 @@ class LGBMTrainer(BaseModel):
                     )
 
                     # regressor on positive samples only
-                    dtrain_reg = lgb.Dataset(X_tr[pos_tr_mask], label=y_tr_f[pos_tr_mask], weight=w_tr[pos_tr_mask], free_raw_data=False)
-                    dvalid_reg = lgb.Dataset(X_va[pos_va_mask], label=y_va_f[pos_va_mask], weight=w_va[pos_va_mask], reference=dtrain_reg, free_raw_data=False)
+                    dtrain_reg = lgb.Dataset(
+                        X_tr[pos_tr_mask],
+                        label=y_tr_f[pos_tr_mask],
+                        weight=w_tr[pos_tr_mask],
+                        free_raw_data=False,
+                    )
+                    dvalid_reg = lgb.Dataset(
+                        X_va[pos_va_mask],
+                        label=y_va_f[pos_va_mask],
+                        weight=w_va[pos_va_mask],
+                        reference=dtrain_reg,
+                        free_raw_data=False,
+                    )
 
                     obj = self.params.objective
                     if cfg.use_asinh_target:
@@ -166,7 +216,7 @@ class LGBMTrainer(BaseModel):
                         learning_rate=self.params.learning_rate,
                         num_leaves=self.params.num_leaves,
                         max_depth=self.params.max_depth,
-                        min_data_in_leaf=self.params.min_data_in_leaf,
+                        min_data_in_leaf=min_leaf_reg,
                         subsample=self.params.subsample,
                         colsample_bytree=self.params.colsample_bytree,
                         reg_alpha=self.params.reg_alpha,
@@ -208,7 +258,9 @@ class LGBMTrainer(BaseModel):
                     self.oof_records.extend(oof_df.to_dict("records"))
                 else:
                     dtrain = lgb.Dataset(X_tr, label=y_tr_f, weight=w_tr, free_raw_data=False)
-                    dvalid = lgb.Dataset(X_va, label=y_va_f, weight=w_va, reference=dtrain, free_raw_data=False)
+                    dvalid = lgb.Dataset(
+                        X_va, label=y_va_f, weight=w_va, reference=dtrain, free_raw_data=False
+                    )
 
                     obj = self.params.objective
                     if cfg.use_asinh_target:
@@ -219,7 +271,7 @@ class LGBMTrainer(BaseModel):
                         learning_rate=self.params.learning_rate,
                         num_leaves=self.params.num_leaves,
                         max_depth=self.params.max_depth,
-                        min_data_in_leaf=self.params.min_data_in_leaf,
+                        min_data_in_leaf=min_leaf_reg,
                         subsample=self.params.subsample,
                         colsample_bytree=self.params.colsample_bytree,
                         reg_alpha=self.params.reg_alpha,
