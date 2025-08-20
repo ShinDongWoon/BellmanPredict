@@ -252,7 +252,8 @@ def tune_patchtst(pp, df_full, cfg):
     best_path = OPTUNA_DIR / "patchtst_best.json"
     best_path.parent.mkdir(parents=True, exist_ok=True)
     with best_path.open("w", encoding="utf-8") as f:
-        json.dump(study.best_params, f, ensure_ascii=False, indent=2)
+        best = {**study.best_params, "stride": study.best_params["patch_len"]}
+        json.dump(best, f, ensure_ascii=False, indent=2)
 
     return study
 
