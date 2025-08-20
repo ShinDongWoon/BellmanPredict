@@ -34,7 +34,7 @@ from LGHackerton.config.default import (
     SHOW_PROGRESS,
     OPTUNA_DIR,
 )
-from LGHackerton.tune import tune_patchtst
+from LGHackerton.tuning.patchtst import PatchTSTTuner
 from LGHackerton.utils.seed import set_seed
 
 
@@ -154,8 +154,12 @@ def load_best_patch_params() -> tuple[dict, int | None]:
         except Exception as e:  # pragma: no cover - best effort
             logging.warning("Failed to parse %s: %s", search_path, e)
 
-    # 2) Optuna artifact
+    # 2) Optuna artifact or tuner output
     best_path = Path(OPTUNA_DIR) / "patchtst_best.json"
+    if not best_path.exists():
+        alt_path = ARTIFACTS_DIR / "patchtst" / "best_params.json"
+        if alt_path.exists():
+            best_path = alt_path
     try:
         with best_path.open("r", encoding="utf-8") as f:
             patch_best = json.load(f)
@@ -218,7 +222,9 @@ def main(show_progress: bool | None = None):
     if TORCH_OK and not args.skip_tune and patch_input_len is None:
         patch_file = Path(OPTUNA_DIR) / "patchtst_best.json"
         if args.force_tune or not patch_file.exists():
-            tune_patchtst(pp, df_full, cfg)
+            tuner = PatchTSTTuner(pp, df_full, cfg)
+            tuner.run(n_trials=cfg.n_trials, force=args.force_tune)
+            tuner.best_params()
         patch_params_dict, patch_input_len = load_best_patch_params()
         if patch_input_len is not None:
             pp.windowizer = SampleWindowizer(lookback=patch_input_len, horizon=H)
