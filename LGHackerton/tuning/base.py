@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Any, Dict
 
 import pandas as pd
 
@@ -31,10 +32,10 @@ class HyperparameterTuner(ABC):
         self.model_name = getattr(cfg, "model_name", self.__class__.__name__)
         self.artifact_dir: Path = ARTIFACTS_DIR / self.model_name
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
-        self._best_params: dict | None = None
+        self._best_params: Dict[str, Any] | None = None
 
     @abstractmethod
-    def run(self, n_trials: int, force: bool) -> dict:
+    def run(self, n_trials: int, force: bool) -> Dict[str, Any]:
         """Execute a hyperparameter search strategy.
 
         Implementations should perform the optimisation (e.g., via Optuna) and
@@ -52,11 +53,11 @@ class HyperparameterTuner(ABC):
 
         Returns
         -------
-        dict
+        Dict[str, Any]
             Best hyperparameter set discovered during the search.
         """
 
-    def best_params(self) -> dict:
+    def best_params(self) -> Dict[str, Any]:
         """Return and persist the best hyperparameter dictionary.
 
         The parameters are written to ``best_params.json`` inside
@@ -64,7 +65,7 @@ class HyperparameterTuner(ABC):
 
         Returns
         -------
-        dict
+        Dict[str, Any]
             The best hyperparameters from the last :meth:`run` execution.
 
         Raises
@@ -81,7 +82,7 @@ class HyperparameterTuner(ABC):
         return self._best_params
 
     @abstractmethod
-    def validate_params(self, params: dict) -> None:
+    def validate_params(self, params: Dict[str, Any]) -> None:
         """Validate a candidate hyperparameter configuration.
 
         Parameters
