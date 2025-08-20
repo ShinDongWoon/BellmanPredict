@@ -158,6 +158,7 @@ def load_best_patch_params() -> tuple[dict, int | None]:
     try:
         with best_path.open("r", encoding="utf-8") as f:
             patch_best = json.load(f)
+        patch_best.setdefault("stride", patch_best.get("patch_len", PATCH_PARAMS["patch_len"]))
         input_len = patch_best.pop("input_len", None)
         return {**PATCH_PARAMS, **patch_best}, input_len
     except Exception as e:  # pragma: no cover - best effort
