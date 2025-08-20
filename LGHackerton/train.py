@@ -231,15 +231,26 @@ def main(show_progress: bool | None = None):
             diag_dir.mkdir(parents=True, exist_ok=True)
             acf_df = compute_acf(res_p)
             pacf_df = compute_pacf(res_p)
-            lb_df = ljung_box_test(res_p, lags=[10, 20, 30])
+            lb_df, res_used = ljung_box_test(
+                res_p, lags=[10, 20, 30], return_residuals=True
+            )
             wt_df = white_test(res_p)
             acf_df.to_csv(diag_dir / "acf.csv", index=False)
             pacf_df.to_csv(diag_dir / "pacf.csv", index=False)
             lb_df.to_csv(diag_dir / "ljung_box.csv", index=False)
+            res_used.rename("residual").to_csv(
+                diag_dir / "ljung_box_input.csv", index=False
+            )
             wt_df.to_csv(diag_dir / "white_test.csv", index=False)
             plot_residuals(res_p, diag_dir)
             logging.info("PatchTST Ljung-Box p-values: %s", lb_df["pvalue"].tolist())
-            logging.info("PatchTST White test p-value: %s", wt_df["lm_pvalue"].iloc[0])
+            logging.info(
+                "PatchTST Ljung-Box residual sample: %s",
+                res_used.head().tolist(),
+            )
+            logging.info(
+                "PatchTST White test p-value: %s", wt_df["lm_pvalue"].iloc[0]
+            )
         except Exception as e:  # pragma: no cover - best effort
             logging.warning("PatchTST diagnostics failed: %s", e)
 

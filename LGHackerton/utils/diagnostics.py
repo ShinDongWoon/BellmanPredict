@@ -69,8 +69,28 @@ def compute_pacf(residuals: pd.Series, nlags: int = 40) -> pd.DataFrame:
     )
 
 
-def ljung_box_test(residuals: pd.Series, lags: List[int]) -> pd.DataFrame:
-    """Ljung-Box test for autocorrelation."""
+def ljung_box_test(
+    residuals: pd.Series, lags: List[int], *, return_residuals: bool = False
+) -> pd.DataFrame | tuple[pd.DataFrame, pd.Series]:
+    """Ljung-Box test for autocorrelation.
+
+    Parameters
+    ----------
+    residuals : pd.Series
+        Raw residual series which may contain ``NaN`` values.
+    lags : List[int]
+        Lags at which to evaluate the Ljung-Box statistic.
+    return_residuals : bool, optional
+        When ``True``, also return the validated residual series after dropping
+        ``NaN`` values and enforcing minimum length requirements.
+
+    Returns
+    -------
+    pd.DataFrame or tuple
+        DataFrame containing Ljung-Box statistics and p-values. If
+        ``return_residuals`` is ``True``, a tuple of the DataFrame and the
+        validated residual :class:`pandas.Series` is returned.
+    """
     if not lags:
         raise ValueError("lags must be a non-empty list")
     max_lag = max(lags)
@@ -82,6 +102,8 @@ def ljung_box_test(residuals: pd.Series, lags: List[int]) -> pd.DataFrame:
     lb = acorr_ljungbox(res, lags=lags, return_df=True)
     lb = lb.rename(columns={"lb_stat": "stat", "lb_pvalue": "pvalue"})
     lb.insert(0, "lag", lags)
+    if return_residuals:
+        return lb, res
     return lb
 
 
