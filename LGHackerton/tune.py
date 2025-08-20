@@ -31,7 +31,7 @@ try:  # torch is optional; used only for GPU cache clearing
 except Exception:  # pragma: no cover - torch optional
     torch = None  # type: ignore
 
-from LGHackerton.config.default import OPTUNA_DIR, TRAIN_PATH, TRAIN_CFG, ARTIFACTS_DIR
+from LGHackerton.config.default import OPTUNA_DIR, TRAIN_PATH, TRAIN_CFG, ARTIFACTS_DIR, PATCH_PARAMS
 from LGHackerton.preprocess import Preprocessor
 from LGHackerton.models.base_trainer import TrainConfig
 from LGHackerton.utils.metrics import weighted_smape_np
@@ -200,6 +200,7 @@ def tune_patchtst(pp, df_full, cfg):
             )
             sampled_params["patch_len"] = patch_len
             sampled_params["stride"] = patch_len
+            sampled_params["num_workers"] = PATCH_PARAMS.get("num_workers", 0)
             if input_len % patch_len != 0:
                 raise optuna.TrialPruned()
 
@@ -304,7 +305,11 @@ def run_patchtst_grid_search(cfg_path: str | Path) -> None:
             try:
                 set_seed(42)
                 params = PatchTSTParams(
-                    patch_len=patch, stride=patch, lr=lr, scaler=scaler
+                    patch_len=patch,
+                    stride=patch,
+                    lr=lr,
+                    scaler=scaler,
+                    num_workers=PATCH_PARAMS.get("num_workers", 0),
                 )
                 trainer = PatchTSTTrainer(
                     params=params, L=inp, H=H, model_dir=cfg.model_dir, device=device

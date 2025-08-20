@@ -72,6 +72,8 @@ class PatchTSTParams:
         Purge window between training and validation sets.
     min_val_samples : int
         Minimum number of samples in the validation set.
+    num_workers : int
+        Number of worker processes used by :class:`torch.utils.data.DataLoader`.
     """
 
     d_model: int = 128
@@ -91,6 +93,7 @@ class PatchTSTParams:
     loss: str = "smape"
     loss_alpha: float = 0.5
     scaler: str = "per_series"
+    num_workers: int = 0
     # validation settings (mirrors TrainConfig)
     val_policy: str = "ratio"
     val_ratio: float = 0.2
@@ -444,8 +447,20 @@ class PatchTSTTrainer(BaseModel):
                 X_train[va_mask], y_train[va_mask], series_idx[va_mask], scaler=self.params.scaler
             )
             pin = self.device != "cpu"
-            tr_loader = DataLoader(tr_ds, batch_size=self.params.batch_size, shuffle=True, pin_memory=pin)
-            va_loader = DataLoader(va_ds, batch_size=self.params.batch_size, shuffle=False, pin_memory=pin)
+            tr_loader = DataLoader(
+                tr_ds,
+                batch_size=self.params.batch_size,
+                shuffle=True,
+                pin_memory=pin,
+                num_workers=self.params.num_workers,
+            )
+            va_loader = DataLoader(
+                va_ds,
+                batch_size=self.params.batch_size,
+                shuffle=False,
+                pin_memory=pin,
+                num_workers=self.params.num_workers,
+            )
             net = PatchTSTNet(
                 self.L,
                 self.H,
@@ -583,7 +598,13 @@ class PatchTSTTrainer(BaseModel):
             X_eval, np.zeros((X_eval.shape[0], self.H), dtype=np.float32), series_idx, scaler=self.params.scaler
         )
         pin = self.device != "cpu"
-        loader = torch.utils.data.DataLoader(ds, batch_size=self.params.batch_size, shuffle=False, pin_memory=pin)
+        loader = torch.utils.data.DataLoader(
+            ds,
+            batch_size=self.params.batch_size,
+            shuffle=False,
+            pin_memory=pin,
+            num_workers=self.params.num_workers,
+        )
         outs = []
         with torch.no_grad():
             for xb, _, sb, mu, std in loader:
