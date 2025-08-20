@@ -162,7 +162,8 @@ def load_best_patch_params() -> tuple[dict, int | None]:
     1. Grid search results saved in ``artifacts/patchtst_search.csv``. The
        combination with the lowest ``val_wsmape`` is selected and its
        ``input_len`` is returned separately to adjust window sizing.
-    2. Optuna best parameters stored in ``OPTUNA_DIR/patchtst_best.json``.
+    2. Optuna best parameters stored in ``OPTUNA_DIR/patchtst_best.json``. The
+       JSON may also include ``input_len`` which is returned separately.
     3. Default ``PATCH_PARAMS`` when no artifacts are available.
 
     Returns
@@ -170,7 +171,7 @@ def load_best_patch_params() -> tuple[dict, int | None]:
     params : dict
         Parameters for :class:`PatchTSTParams`.
     input_len : int | None
-        Lookback length if determined from grid search, otherwise ``None``.
+        Lookback length if provided by artifacts, otherwise ``None``.
     """
 
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -200,7 +201,8 @@ def load_best_patch_params() -> tuple[dict, int | None]:
     try:
         with best_path.open("r", encoding="utf-8") as f:
             patch_best = json.load(f)
-        return {**PATCH_PARAMS, **patch_best}, None
+        input_len = patch_best.pop("input_len", None)
+        return {**PATCH_PARAMS, **patch_best}, input_len
     except Exception as e:  # pragma: no cover - best effort
         logging.warning("Failed to load PatchTST params from %s: %s", best_path, e)
         return PATCH_PARAMS, None
@@ -296,9 +298,12 @@ def main(show_progress: bool | None = None):
         patch_file = Path(OPTUNA_DIR) / "patchtst_best.json"
         if args.force_tune or not patch_file.exists():
             tune_patchtst(pp, df_full, cfg)
-        patch_params_dict, _ = load_best_patch_params()
+        patch_params_dict, patch_input_len = load_best_patch_params()
+        if patch_input_len is not None:
+            pp.windowizer = SampleWindowizer(lookback=patch_input_len, horizon=H)
 
     if TORCH_OK:
+        patch_params_dict.pop("input_len", None)
         patch_params = PatchTSTParams(**patch_params_dict)
         L_used = patch_input_len if patch_input_len is not None else L
         pt_tr = PatchTSTTrainer(params=patch_params, L=L_used, H=H, model_dir=cfg.model_dir, device=device)
