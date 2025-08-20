@@ -6,9 +6,11 @@ import re
 import numpy as np
 import pandas as pd
 import logging
+import argparse
 
 from LGHackerton.preprocess import Preprocessor, L, H
-from LGHackerton.models.patchtst_trainer import PatchTSTTrainer, PatchTSTParams
+from LGHackerton.models import ModelRegistry
+from LGHackerton.models.patchtst_trainer import PatchTSTParams
 from LGHackerton.utils.device import select_device
 from LGHackerton.config.default import (
     TEST_GLOB,
@@ -53,6 +55,15 @@ def convert_to_submission(pred_df: pd.DataFrame, sample_path: str) -> pd.DataFra
     return out_df
 
 def main():
+    parser = argparse.ArgumentParser()
+    available = ", ".join(ModelRegistry.available())
+    parser.add_argument("--model", default="patchtst", help=f"model name ({available})")
+    args = parser.parse_args()
+    try:
+        trainer_cls = ModelRegistry.get(args.model)
+    except KeyError as e:
+        parser.error(str(e))
+
     device = select_device()
 
     pp = Preprocessor(); pp.load(ARTIFACTS_PATH)
@@ -61,8 +72,8 @@ def main():
     cfg = TrainConfig(**TRAIN_CFG)
     set_seed(cfg.seed)
 
-    pt = PatchTSTTrainer(params=PatchTSTParams(**PATCH_PARAMS), L=L, H=H, model_dir=cfg.model_dir, device=device)
-    pt.load(os.path.join(cfg.model_dir, "patchtst.pt"))
+    pt = trainer_cls(params=PatchTSTParams(**PATCH_PARAMS), L=L, H=H, model_dir=cfg.model_dir, device=device)
+    pt.load(os.path.join(cfg.model_dir, f"{args.model}.pt"))
 
     all_outputs = []
 

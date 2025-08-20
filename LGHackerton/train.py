@@ -14,6 +14,7 @@ from LGHackerton.preprocess import Preprocessor, DATE_COL, SERIES_COL, SALES_COL
 from LGHackerton.preprocess.preprocess_pipeline_v1_1 import SampleWindowizer
 from LGHackerton.models.base_trainer import TrainConfig
 from LGHackerton.models.patchtst_trainer import PatchTSTParams, PatchTSTTrainer, TORCH_OK
+from LGHackerton.models import ModelRegistry
 from LGHackerton.utils.device import select_device
 from LGHackerton.utils.diagnostics import (
     compute_acf,
@@ -181,9 +182,15 @@ def main(show_progress: bool | None = None):
     parser.add_argument("--force-tune", action="store_true", help="re-run tuning even if artifacts exist")
     parser.add_argument("--trials", type=int, default=20, help="number of Optuna trials")
     parser.add_argument("--timeout", type=int, default=None, help="time limit for tuning (seconds)")
+    available = ", ".join(ModelRegistry.available())
+    parser.add_argument("--model", default="patchtst", help=f"model name ({available})")
     parser.set_defaults(show_progress=SHOW_PROGRESS)
 
     args = parser.parse_args()
+    try:
+        trainer_cls = ModelRegistry.get(args.model)
+    except KeyError as e:
+        parser.error(str(e))
     if show_progress is None:
         show_progress = args.show_progress
 
@@ -204,7 +211,8 @@ def main(show_progress: bool | None = None):
     cfg = TrainConfig(**TRAIN_CFG)
     cfg.n_trials = args.trials
     cfg.timeout = args.timeout
-    _patch_patchtst_logging(cfg)
+    if trainer_cls is PatchTSTTrainer:
+        _patch_patchtst_logging(cfg)
     set_seed(cfg.seed)
 
     if TORCH_OK and not args.skip_tune and patch_input_len is None:
@@ -219,7 +227,7 @@ def main(show_progress: bool | None = None):
         patch_params_dict.pop("input_len", None)
         patch_params = PatchTSTParams(**patch_params_dict)
         L_used = patch_input_len if patch_input_len is not None else L
-        pt_tr = PatchTSTTrainer(params=patch_params, L=L_used, H=H, model_dir=cfg.model_dir, device=device)
+        pt_tr = trainer_cls(params=patch_params, L=L_used, H=H, model_dir=cfg.model_dir, device=device)
         pt_tr.train(X_train, y_train, series_ids, label_dates, cfg)
         oof_patch = pt_tr.get_oof()
         oof_patch.to_csv(OOF_PATCH_OUT, index=False)
