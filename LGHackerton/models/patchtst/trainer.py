@@ -16,6 +16,8 @@ except Exception as _e:
 
 from LGHackerton.models.base_trainer import BaseModel, TrainConfig
 from LGHackerton.utils.metrics import smape, weighted_smape_np, PRIORITY_OUTLETS
+from LGHackerton.preprocess import Preprocessor, H
+from LGHackerton.preprocess.preprocess_pipeline_v1_1 import SampleWindowizer
 from .train import build_loss
 
 @dataclass
@@ -311,6 +313,12 @@ class PatchTSTTrainer(BaseModel):
                     warnings.warn(
                         f"ROCV callback {getattr(cb, '__name__', repr(cb))} failed: {exc}"
                     )
+
+    @staticmethod
+    def build_dataset(pp: Preprocessor, df_full: pd.DataFrame, input_len: int | None = None):
+        if input_len is not None:
+            pp.windowizer = SampleWindowizer(lookback=input_len, horizon=H)
+        return pp.build_patch_train(df_full)
 
     def __init__(self, params: PatchTSTParams, L:int, H:int, model_dir: str, device: str):
         super().__init__(model_params=asdict(params), model_dir=model_dir)
