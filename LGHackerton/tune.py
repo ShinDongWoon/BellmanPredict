@@ -86,6 +86,9 @@ _FEATURE_IMPORTANCE: List[dict[str, Any]] = []
 
 TRIAL_LOG_PATH = OPTUNA_DIR / "lgbm_trials.json"
 
+# Minimum required samples per horizon to attempt training
+MIN_SAMPLES_PER_HORIZON = 100
+
 
 def _log_fold_start(prefix: str, seed: int, fold_name: str, tr_mask: np.ndarray, va_mask: np.ndarray, cfg: TrainConfig) -> None:
     """Persist fold information for a trial to artifacts directory."""
@@ -135,15 +138,23 @@ def _log_trial(record: dict[str, Any]) -> None:
 
 
 def objective_lgbm(trial: optuna.Trial) -> float:
-    """Train LightGBM with trial params and evaluate wSMAPE."""
+    """Train LightGBM with additional per-horizon validation logic.
+
+    This revised objective performs a series of sanity checks before training
+    each horizon. Horizons with insufficient samples, too many constant
+    features, very small date ranges or extremely imbalanced targets are
+    skipped.  Low-variance features are dropped and a sample-weight of ``2.0``
+    is applied to positive targets.  The intent is to reduce noisy warnings
+    from LightGBM and to avoid overfitting on dubious data slices.
+    """
 
     cfg = TrainConfig(**TRAIN_CFG)
     set_seed(cfg.seed)
     df, feat_cols = _prepare_lgbm_train()
 
-    # Maximum number of boosting rounds. Training may stop earlier
-    # due to the early_stopping callback configured below.
+    # cap the maximum boosting rounds for faster debugging
     num_boost_round = trial.suggest_int("num_boost_round", 200, 2000)
+    num_boost_round = min(num_boost_round, 100)
 
     params = {
         "objective": "tweedie",
@@ -151,7 +162,7 @@ def objective_lgbm(trial: optuna.Trial) -> float:
         "verbosity": -1,
         "num_leaves": trial.suggest_int("num_leaves", 31, 255),
         "max_depth": trial.suggest_int("max_depth", -1, 16),
-        # ``min_data_in_leaf`` is suggested later once the training size is known
+        # ``min_data_in_leaf`` suggested later once training size is known
         "learning_rate": trial.suggest_float("learning_rate", 1e-3, 0.3, log=True),
         "subsample": trial.suggest_float("subsample", 0.5, 1.0),
         "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
@@ -169,47 +180,79 @@ def objective_lgbm(trial: optuna.Trial) -> float:
             dfh = df[df["h"] == h]
             if dfh.empty:
                 continue
+
+            if len(dfh) < MIN_SAMPLES_PER_HORIZON:
+                logger.warning(
+                    "h%s: fewer than %s samples; skipping", h, MIN_SAMPLES_PER_HORIZON
+                )
+                continue
+
             dfh = dfh.sort_values("date")
 
-            # compute feature variances once to avoid repeated heavy computation
+            # analyse feature variance
             feat_var = dfh[feat_cols].var()
-            if (feat_var == 0).all():
-                logger.warning("h%s: all feature variances are zero; skipping", h)
+            zero_var_ratio = (feat_var == 0).mean()
+            if zero_var_ratio > 0.8:
+                logger.warning(
+                    "h%s: %.0f%% features have zero variance; skipping",
+                    h,
+                    zero_var_ratio * 100,
+                )
+                continue
+
+            valid_feat_cols = [f for f, v in feat_var.items() if v > 1e-6]
+            if len(valid_feat_cols) < 5:
+                logger.warning("h%s: fewer than 5 informative features; skipping", h)
+                continue
+
+            date_range = dfh["date"].max() - dfh["date"].min()
+            if date_range < pd.Timedelta(days=10):
+                logger.warning("h%s: date range under 10 days; skipping", h)
                 continue
 
             dates = dfh["date"].sort_values().unique()
-            if len(dates) < 2:
+            split = int(len(dates) * 0.7)
+            if split == 0 or split == len(dates):
+                logger.warning("h%s: unable to create train/valid split; skipping", h)
                 continue
-            split = int(len(dates) * 0.8)
+
             tr_dates, va_dates = dates[:split], dates[split:]
             tr_mask = dfh["date"].isin(tr_dates)
             va_mask = dfh["date"].isin(va_dates)
-            _log_fold_start("tune_lgbm", cfg.seed, f"trial{trial.number}_h{h}", tr_mask.values, va_mask.values, cfg)
+            _log_fold_start(
+                "tune_lgbm",
+                cfg.seed,
+                f"trial{trial.number}_h{h}",
+                tr_mask.values,
+                va_mask.values,
+                cfg,
+            )
 
-            X_tr = dfh.loc[tr_mask, feat_cols].values.astype("float32")
+            X_tr = dfh.loc[tr_mask, valid_feat_cols].values.astype("float32")
             y_tr = dfh.loc[tr_mask, "y"].values.astype("float32")
-            if not np.any(y_tr > 0):
-                logger.warning("h%s: no positive samples; skipping", h)
+            pos_ratio = (y_tr > 0).mean()
+            if pos_ratio < 0.01:
+                logger.warning(
+                    "h%s: positive ratio %.3f < 1%%; skipping", h, float(pos_ratio)
+                )
                 continue
 
             n_samples = len(y_tr)
-            if n_samples <= 1:
-                logger.warning("h%s: insufficient samples; skipping", h)
-                continue
+            lower_bound = max(int(n_samples * 0.01), 1)
+            upper_bound = min(int(n_samples * 0.10), 50)
+            if upper_bound < lower_bound:
+                upper_bound = lower_bound
 
-            upper_bound = min(max(20, n_samples // 100), n_samples - 1)
-            lower_bound = 1 if n_samples < 100 else 10
-
-            # optionally tune per horizon by giving each horizon its own parameter name
             leaf_param = f"min_data_in_leaf_h{h}"
             min_leaf = trial.suggest_int(leaf_param, lower_bound, upper_bound)
             params["min_data_in_leaf"] = min_leaf
 
-            X_va = dfh.loc[va_mask, feat_cols].values.astype("float32")
+            X_va = dfh.loc[va_mask, valid_feat_cols].values.astype("float32")
             y_va = dfh.loc[va_mask, "y"].values.astype("float32")
             outlets = dfh.loc[va_mask, "series_id"].str.split("::").str[0].values
 
-            dtrain = lgb.Dataset(X_tr, label=y_tr)
+            w_tr = np.where(y_tr > 0, 2.0, 1.0)
+            dtrain = lgb.Dataset(X_tr, label=y_tr, weight=w_tr)
             dvalid = lgb.Dataset(X_va, label=y_va)
 
             fold_params = params.copy()
@@ -247,9 +290,8 @@ def objective_lgbm(trial: optuna.Trial) -> float:
             score = weighted_smape_np(y_va, preds, outlets, priority_weight=priority_w)
             scores.append(score)
 
-            # record feature importance per trial and fold
             fi = booster.feature_importance(importance_type="gain")
-            for feat, imp in zip(feat_cols, fi):
+            for feat, imp in zip(valid_feat_cols, fi):
                 _FEATURE_IMPORTANCE.append(
                     {
                         "feature": feat,
@@ -261,7 +303,7 @@ def objective_lgbm(trial: optuna.Trial) -> float:
 
             del booster, dtrain, dvalid
         except Exception as e:  # pragma: no cover - robustness
-            logger.exception("Trial %s fold %s failed: %s", trial.number, h, e)
+            logger.exception("Trial %s horizon %s failed: %s", trial.number, h, e)
             continue
 
     final_score = float(np.mean(scores)) if scores else float("inf")
