@@ -21,7 +21,7 @@ from typing import Dict, Tuple, Optional, List, Iterable
 
 import numpy as np
 import pandas as pd
-from src.data.preprocess import symmetric_transform
+from .transforms import symmetric_transform
 try:
     from tqdm.auto import tqdm
 except Exception:  # pragma: no cover - tqdm optional

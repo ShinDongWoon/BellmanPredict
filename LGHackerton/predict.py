@@ -20,7 +20,7 @@ from LGHackerton.config.default import (
     TRAIN_CFG,
 )
 from LGHackerton.utils.seed import set_seed
-from src.data.preprocess import inverse_symmetric_transform
+from LGHackerton.preprocess import inverse_symmetric_transform
 from LGHackerton.postprocess import aggregate_predictions, convert_to_submission
 from LGHackerton.utils.io import read_table
 import importlib, inspect
