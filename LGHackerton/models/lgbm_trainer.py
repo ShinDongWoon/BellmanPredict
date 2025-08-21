@@ -10,7 +10,7 @@ from typing import Dict, List, Tuple, Any, Optional
 import lightgbm as lgb
 from LGHackerton.models.base_trainer import BaseModel, TrainConfig
 from LGHackerton.utils.metrics import lgbm_weighted_smape
-from LGHackerton.preprocess import L, H
+from LGHackerton.preprocess import Preprocessor, L, H
 PRIORITY_OUTLETS = {"담하", "미라시아"}
 
 # holds per-fold debugging context for LightGBM warnings
@@ -46,6 +46,33 @@ class LGBMTrainer(BaseModel):
         self.oof_records: List[Dict[str, Any]] = []
 
     @staticmethod
+    def build_dataset(pp: Preprocessor, df_full: pd.DataFrame, input_len: int | None = None):
+        """Build the LightGBM training dataset.
+
+        Parameters
+        ----------
+        pp : Preprocessor
+            Fitted preprocessing pipeline providing ``build_lgbm_train``.
+        df_full : pd.DataFrame
+            Fully processed panel data containing all feature columns.
+        input_len : int | None
+            Unused placeholder to keep a consistent signature with other
+            trainers. Included for API compatibility.
+
+        Returns
+        -------
+        Tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray]
+            ``df_train`` containing all columns required by ``train``, the
+            target vector, corresponding series identifiers and label dates.
+        """
+
+        df_train = pp.build_lgbm_train(df_full)
+        y = df_train["y"].to_numpy(dtype="float32")
+        series_ids = df_train["series_id"].to_numpy()
+        label_dates = LGBMTrainer._compute_label_date(df_train, "date", "h").to_numpy()
+        return df_train, y, series_ids, label_dates
+
+    @staticmethod
     def _compute_label_date(df: pd.DataFrame, date_col: str, h_col: str) -> pd.Series:
         return pd.to_datetime(df[date_col]) + pd.to_timedelta(df[h_col].astype(int), unit="D")
 
@@ -67,7 +94,45 @@ class LGBMTrainer(BaseModel):
         assert folds, "No valid folds generated"
         return folds
 
-    def train(self, df_train: pd.DataFrame, cfg: TrainConfig, preprocessors: Optional[List[Any]] = None) -> None:
+    def train(
+        self,
+        df_train: pd.DataFrame,
+        y_train: Optional[np.ndarray] = None,
+        series_ids: Optional[np.ndarray] = None,
+        label_dates: Optional[np.ndarray] = None,
+        cfg: Optional[TrainConfig] = None,
+        preprocessors: Optional[List[Any]] = None,
+    ) -> None:
+        """Train LightGBM models.
+
+        Parameters
+        ----------
+        df_train : pd.DataFrame
+            Training dataframe produced by :meth:`build_dataset`.
+        y_train, series_ids, label_dates : Optional
+            Unused placeholders for API compatibility with other trainers.
+        cfg : TrainConfig
+            Training configuration.
+        preprocessors : Optional[List[Any]]
+            Optional list of preprocessors or artifacts.
+
+        Notes
+        -----
+        The method accepts both the historical call signature ``train(df_train,
+        cfg, preprocessors)`` and the newer signature
+        ``train(df_train, y, sid, dates, cfg)`` used by the unified training
+        pipeline. Extra positional arguments are ignored.
+        """
+
+        # backward compatibility: allow train(df_train, cfg, preprocessors)
+        if cfg is None and isinstance(y_train, TrainConfig):
+            cfg = y_train
+            if preprocessors is None:
+                preprocessors = series_ids  # type: ignore[assignment]
+
+        if cfg is None:
+            raise TypeError("TrainConfig must be provided")
+
         self.preprocessors = preprocessors
         self.use_asinh_target = cfg.use_asinh_target
         self.use_hurdle = getattr(cfg, "use_hurdle", False)
