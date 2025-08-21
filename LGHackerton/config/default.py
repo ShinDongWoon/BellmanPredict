@@ -27,8 +27,8 @@ ARTIFACTS_PATH  = str((ARTIFACTS_DIR / "preprocess_artifacts.pkl").resolve())
 SUBMISSION_OUT  = str((ARTIFACTS_DIR / "submission.csv").resolve())
 # PatchTST는 prefix를 요구하므로 확장자 없이 파일명만 제공
 PATCH_EVAL_OUT  = str((ARTIFACTS_DIR / "patch_eval").resolve())
-# PatchTST 예측 결과 저장 경로
-PATCH_PRED_OUT  = str((ARTIFACTS_DIR / "eval_patch.csv").resolve())
+# 모델 예측 결과 저장 경로
+PRED_OUT  = str((ARTIFACTS_DIR / "eval_pred.csv").resolve())
 OOF_PATCH_OUT = str((ARTIFACTS_DIR / "oof_patch.csv").resolve())
 
 # preprocessing options
