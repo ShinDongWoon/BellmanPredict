@@ -13,7 +13,6 @@ from datetime import datetime
 
 from LGHackerton.preprocess import Preprocessor, L, H
 from LGHackerton.models.base_trainer import TrainConfig
-from LGHackerton.models.patchtst.trainer import PatchTSTTrainer, TORCH_OK
 from LGHackerton.models import ModelRegistry
 from LGHackerton.utils.device import select_device
 from LGHackerton.utils.diagnostics import (
@@ -125,9 +124,8 @@ def _read_table(path: str) -> pd.DataFrame:
     raise ValueError("Unsupported file type. Use .csv or .xlsx")
 
 
-def load_best_patch_params() -> tuple[dict, int | None]:
-    """
-    Determine PatchTST hyperparameters.
+def _load_patchtst_params() -> tuple[dict, int | None]:
+    """Load PatchTST parameters from tuning artifacts.
 
     Preference order:
     1. Grid search results saved in ``artifacts/patchtst_search.csv``. The
@@ -184,6 +182,32 @@ def load_best_patch_params() -> tuple[dict, int | None]:
         return PATCH_PARAMS, None
 
 
+def load_best_params(model_name: str) -> tuple[dict, int | None]:
+    """Dispatch to a model-specific parameter loader.
+
+    Parameters
+    ----------
+    model_name : str
+        Name of the model whose parameters should be loaded.
+
+    Returns
+    -------
+    params : dict
+        Best-known parameters for ``model_name``. Empty when no loader exists.
+    input_len : int | None
+        Optional lookback length provided by the loader.
+    """
+
+    loaders = {
+        "patchtst": _load_patchtst_params,
+    }
+    loader = loaders.get(model_name)
+    if loader is None:
+        logging.info("No specialized loader for %s; using empty parameters", model_name)
+        return {}, None
+    return loader()
+
+
 def report_oof_metrics(oof_df, model_name: str) -> None:
     """Compute and log OOF metrics for a model."""
     metrics = compute_oof_metrics(oof_df)
@@ -223,11 +247,20 @@ def run_training(ctx: PipelineContext) -> None:
     except ValueError as e:
         logging.error(str(e))
         raise
-    X_train, y_train, series_ids, label_dates = trainer_cls.build_dataset(
-        ctx.preprocessor, ctx.df_full, ctx.input_len
-    )
-    if ctx.model_name == "patchtst" and not TORCH_OK:
-        raise RuntimeError("PyTorch is not available")
+    try:
+        build_dataset = trainer_cls.build_dataset  # type: ignore[attr-defined]
+    except AttributeError as e:
+        raise RuntimeError(f"{ctx.model_name} build_dataset not implemented") from e
+    try:
+        X_train, y_train, series_ids, label_dates = build_dataset(
+            ctx.preprocessor, ctx.df_full, ctx.input_len
+        )
+    except NotImplementedError as e:
+        raise RuntimeError(f"{ctx.model_name} build_dataset not implemented") from e
+    if ctx.model_name == "patchtst":
+        module = importlib.import_module(trainer_cls.__module__)
+        if not getattr(module, "TORCH_OK", True):
+            raise RuntimeError("PyTorch is not available")
     params_module = importlib.import_module(trainer_cls.__module__)
     params_cls_name = trainer_cls.__name__.replace("Trainer", "Params")
     params_cls = getattr(params_module, params_cls_name)
@@ -296,11 +329,11 @@ def main():
 
     device = select_device()  # ask user for compute environment
 
-    params_dict, input_len = load_best_patch_params()
+    params_dict, input_len = load_best_params(model_name)
     cfg = TrainConfig(**TRAIN_CFG)
     cfg.n_trials = args.trials
     cfg.timeout = args.timeout
-    if trainer_cls is PatchTSTTrainer:
+    if model_name == "patchtst":
         _patch_patchtst_logging(cfg)
     set_seed(cfg.seed)
 
