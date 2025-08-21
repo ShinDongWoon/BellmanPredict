@@ -264,6 +264,9 @@ class PatchTSTTrainer(BaseModel):
     fold index and corresponding train/validation masks. Errors raised inside
     callbacks are isolated from training by being converted to warnings.
     """
+    #: column suffix used for prediction outputs
+    prediction_column_name = "patch"
+
     #: Callbacks executed for each ROCV fold immediately after slices are
     #: computed and before training begins. Each callback must accept
     #: ``(seed, fold_idx, train_mask, val_mask, cfg)``. Exceptions are caught
@@ -319,6 +322,11 @@ class PatchTSTTrainer(BaseModel):
         if input_len is not None:
             pp.windowizer = SampleWindowizer(lookback=input_len, horizon=H)
         return pp.build_patch_train(df_full)
+
+    @staticmethod
+    def build_eval_dataset(pp: Preprocessor, df_full: pd.DataFrame):
+        """Build evaluation dataset for prediction."""
+        return pp.build_patch_eval(df_full)
 
     def __init__(self, params: PatchTSTParams, L:int, H:int, model_dir: str, device: str):
         super().__init__(model_params=asdict(params), model_dir=model_dir)
