@@ -10,6 +10,8 @@ from typing import Dict, Tuple
 
 import numpy as np
 import optuna
+from optuna.pruners import MedianPruner, PatientPruner
+from optuna.samplers import TPESampler
 
 from LGHackerton.config.default import ARTIFACTS_DIR, PATCH_PARAMS
 from LGHackerton.models.patchtst.trainer import (
@@ -189,10 +191,38 @@ class PatchTSTTuner(HyperparameterTuner):
         if not TORCH_OK:
             raise RuntimeError("PyTorch not available for PatchTST")
 
-        study = optuna.create_study(direction="minimize")
-        input_lens = getattr(self.cfg, "input_lens", None) or [96, 168, 336]
+        input_lens = getattr(self.cfg, "input_lens", None) or [96, 128, 168]
         if not isinstance(input_lens, (list, tuple)):
             input_lens = [input_lens]
+
+        param_count = 11
+        sampler = TPESampler(
+            multivariate=True,
+            group=True,
+            constant_liar=True,
+            n_startup_trials=max(20, 2 * param_count),
+            n_ei_candidates=64,
+            seed=getattr(self.cfg, "seed", 42),
+            warn_independent_sampling=True,
+        )
+
+        def _constraints_func(trial: optuna.trial.FrozenTrial) -> tuple[float, float]:
+            d_model = trial.params.get("d_model")
+            n_heads = trial.params.get("n_heads")
+            patch_len = trial.params.get("patch_len")
+            input_len = trial.params.get("input_len")
+            return (
+                (d_model % n_heads) if d_model is not None and n_heads is not None else 0.0,
+                (patch_len - input_len)
+                if patch_len is not None and input_len is not None
+                else 0.0,
+            )
+
+        pruner = PatientPruner(MedianPruner(n_warmup_steps=5), patience=2)
+        study = optuna.create_study(
+            direction="minimize", sampler=sampler, pruner=pruner
+        )
+        study.sampler.constraints_func = _constraints_func
 
         search = self.search_space
 
