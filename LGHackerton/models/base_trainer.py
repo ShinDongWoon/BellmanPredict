@@ -43,3 +43,12 @@ class BaseModel(ABC):
 
     @abstractmethod
     def load(self, *args, **kwargs) -> None: ...
+
+    @staticmethod
+    @abstractmethod
+    def build_eval_dataset(pp, df_eval_full):
+        """Build evaluation dataset for prediction."""
+
+    @abstractmethod
+    def predict_df(self, eval_df):
+        """Generate prediction dataframe from evaluation dataset."""

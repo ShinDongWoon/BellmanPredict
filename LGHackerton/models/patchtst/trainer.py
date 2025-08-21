@@ -16,7 +16,7 @@ except Exception as _e:
 
 from LGHackerton.models.base_trainer import BaseModel, TrainConfig
 from LGHackerton.utils.metrics import smape, weighted_smape_np, PRIORITY_OUTLETS
-from LGHackerton.preprocess import Preprocessor, H
+from LGHackerton.preprocess import Preprocessor, L as DEFAULT_L, H as DEFAULT_H, inverse_symmetric_transform
 from LGHackerton.preprocess.preprocess_pipeline_v1_1 import SampleWindowizer
 from .train import build_loss
 
@@ -328,13 +328,22 @@ class PatchTSTTrainer(BaseModel):
         """Build evaluation dataset for prediction."""
         return pp.build_patch_eval(df_full)
 
-    def __init__(self, params: PatchTSTParams, L:int, H:int, model_dir: str, device: str):
+    def __init__(
+        self,
+        params: PatchTSTParams,
+        model_dir: str,
+        device: str,
+        L: int = DEFAULT_L,
+        H: int = DEFAULT_H,
+    ):
         super().__init__(model_params=asdict(params), model_dir=model_dir)
-        self.params = params; self.L=L; self.H=H
+        self.params = params
+        self.L = L
+        self.H = H
         self.models: List[Any] = []
         self.device = device  # 'cpu', 'cuda', or 'mps'
-        self.id2idx={}
-        self.idx2id=[]
+        self.id2idx = {}
+        self.idx2id = []
         self.oof_records: List[Dict[str, Any]] = []
 
     def _ensure_torch(self):
@@ -644,6 +653,17 @@ class PatchTSTTrainer(BaseModel):
                 outs.append(out.cpu().numpy())
         yhat = np.clip(np.concatenate(outs, 0), 0, None)
         return yhat
+
+    def predict_df(self, eval_df):
+        """Return prediction dataframe for PatchTST."""
+        X_eval, sids, _ = eval_df
+        sid_idx = np.array([self.id2idx.get(sid, 0) for sid in sids])
+        y_pred = self.predict(X_eval, sid_idx)
+        y_pred = inverse_symmetric_transform(y_pred)
+        reps = np.repeat(sids, self.H)
+        hs = np.tile(np.arange(1, self.H + 1), len(sids))
+        out = pd.DataFrame({"series_id": reps, "h": hs, "yhat_patch": y_pred.reshape(-1)})
+        return out
 
     def get_oof(self) -> pd.DataFrame:
         return pd.DataFrame(self.oof_records)
