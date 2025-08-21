@@ -2,12 +2,17 @@
 
 ## Hurdle Model Combination
 
-Throughout the project, binary classification probabilities and regression
-forecasts are combined using probability multiplication. The final demand
-estimate for each horizon is computed as ``p * \hat{y}``, where ``p`` is the
-predicted probability of non-zero demand. This convention is implemented in
-`LGBMTrainer`, the standalone LightGBM utilities, and the Optuna tuning
-objective.
+Binary classification probabilities and regression forecasts are blended using
+the conditional mean of a zero-truncated distribution. Given a classifier
+probability ``p`` and an unconditional mean forecast ``\mu_u``, the zero
+probability is ``P0 = (\kappa / (\kappa + \mu_u))^\kappa``. The conditional
+mean ``\mu_c`` is then ``\mu_u / (1 - P0)`` and the final prediction becomes::
+
+    y_hat = ((1 - \epsilon_{leaky}) * p + \epsilon_{leaky}) * \mu_c
+
+The shape parameter ``kappa`` and the leakage term ``epsilon_leaky`` can be
+configured via ``PATCH_PARAMS`` and control the zero-probability assumption and
+stability of the combination respectively.
 
 ## Preprocessing
 
