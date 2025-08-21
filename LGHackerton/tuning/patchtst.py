@@ -33,6 +33,15 @@ except Exception:  # pragma: no cover - torch optional
 class PatchTSTSearchSpace:
     """Search space definitions for PatchTST hyperparameters.
 
+    This configuration uses a reduced search range focusing on smaller
+    embedding sizes and shallower Transformer depth:
+
+    ``d_model``=(128, 192, 256), ``n_heads``=(4, 8), ``depth``=(1, 2),
+    ``patch_len``/``stride``=(8, 12, 14, 16), ``dropout`` in [0.40, 0.60],
+    ``lr`` in [1e-3, 5e-3], ``weight_decay`` in [1e-4, 5e-4],
+    ``id_embed_dim``=(8, 16, 32), ``batch_size``=(32, 64),
+    ``max_epochs`` in [60, 80], ``patience`` in [10, 15].
+
     Attributes
     ----------
     d_model : tuple[int, ...]
@@ -61,18 +70,18 @@ class PatchTSTSearchSpace:
         Inclusive range for early-stopping patience.
     """
 
-    d_model: Tuple[int, ...] = (64, 128, 256)
+    d_model: Tuple[int, ...] = (128, 192, 256)
     n_heads: Tuple[int, ...] = (4, 8)
-    depth: Tuple[int, int] = (2, 6)
-    patch_len: Tuple[int, ...] = (8, 12, 14, 16, 24)
-    stride: Tuple[int, ...] = (8, 12, 14, 16, 24)
-    dropout: Tuple[float, float] = (0.0, 0.5)
-    lr: Tuple[float, float] = (1e-4, 1e-2)
-    weight_decay: Tuple[float, float] = (1e-6, 1e-3)
-    id_embed_dim: Tuple[int, ...] = (0, 16)
-    batch_size: Tuple[int, ...] = (64, 128, 256)
-    max_epochs: Tuple[int, int] = (50, 200)
-    patience: Tuple[int, int] = (5, 30)
+    depth: Tuple[int, int] = (1, 2)
+    patch_len: Tuple[int, ...] = (8, 12, 14, 16)
+    stride: Tuple[int, ...] = (8, 12, 14, 16)
+    dropout: Tuple[float, float] = (0.40, 0.60)
+    lr: Tuple[float, float] = (1e-3, 5e-3)
+    weight_decay: Tuple[float, float] = (1e-4, 5e-4)
+    id_embed_dim: Tuple[int, ...] = (8, 16, 32)
+    batch_size: Tuple[int, ...] = (32, 64)
+    max_epochs: Tuple[int, int] = (60, 80)
+    patience: Tuple[int, int] = (10, 15)
 
 
 def _log_fold_start(
