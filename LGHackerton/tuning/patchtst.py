@@ -183,10 +183,17 @@ class PatchTSTTuner(HyperparameterTuner):
             if cache.exists():
                 with cache.open("r", encoding="utf-8") as f:
                     cached = json.load(f)
-                self.validate_params(cached)
-                self._best_params = cached
-                self.best_input_len = cached.get("input_len")
-                return cached
+                try:
+                    self.validate_params(cached)
+                except ValueError as exc:
+                    logging.info(
+                        "Invalid cached parameters; ignoring and starting a new search: %s",
+                        exc,
+                    )
+                else:
+                    self._best_params = cached
+                    self.best_input_len = cached.get("input_len")
+                    return cached
 
         if not TORCH_OK:
             raise RuntimeError("PyTorch not available for PatchTST")
