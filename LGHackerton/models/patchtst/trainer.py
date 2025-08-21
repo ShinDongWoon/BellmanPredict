@@ -55,6 +55,14 @@ class PatchTSTParams:
         Maximum number of training epochs per fold.
     patience : int
         Early stopping patience measured in epochs.
+    loss : str
+        Loss function to use during optimisation.
+    loss_alpha : float
+        Mixing factor when ``loss`` is ``"hybrid"``.
+    kappa : float
+        Scaling factor applied within the loss function.
+    epsilon_leaky : float
+        Small constant added for numerical stability in leaky operations.
     scaler : str
         Scaling strategy ("per_series" or "revin").
     val_policy : str
@@ -93,6 +101,8 @@ class PatchTSTParams:
     patience: int = 20
     loss: str = "smape"
     loss_alpha: float = 0.5
+    kappa: float = 1.0
+    epsilon_leaky: float = 1e-8
     scaler: str = "per_series"
     num_workers: int = 0
     # validation settings (mirrors TrainConfig)
