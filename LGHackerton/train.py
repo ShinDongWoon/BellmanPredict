@@ -27,15 +27,14 @@ from LGHackerton.utils.io import read_table
 from LGHackerton.config.default import (
     TRAIN_PATH,
     ARTIFACTS_PATH,
-    PATCH_PARAMS,
     TRAIN_CFG,
     ARTIFACTS_DIR,
     OOF_PATCH_OUT,
     SHOW_PROGRESS,
-    OPTUNA_DIR,
 )
 from LGHackerton.tuning import TunerRegistry
 from LGHackerton.utils.seed import set_seed
+from LGHackerton.utils.params import load_best_params
 
 
 @dataclass
@@ -117,91 +116,6 @@ def _patch_patchtst_logging(cfg: TrainConfig) -> None:
             stacklevel=2,
         )
 
-
-def _load_patchtst_params() -> tuple[dict, int | None]:
-    """Load PatchTST parameters from tuning artifacts.
-
-    Preference order:
-    1. Grid search results saved in ``artifacts/patchtst_search.csv``. The
-       combination with the lowest ``val_wsmape`` is selected and its
-       ``input_len`` is returned separately to adjust window sizing.
-    2. Optuna best parameters stored in ``OPTUNA_DIR/patchtst_best.json``. The
-       JSON may also include ``input_len`` which is returned separately.
-    3. Default ``PATCH_PARAMS`` when no artifacts are available.
-
-    Returns
-    -------
-    params : dict
-        Parameters for :class:`PatchTSTParams`.
-    input_len : int | None
-        Lookback length if provided by artifacts, otherwise ``None``.
-    """
-
-    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-
-    # 1) Grid search CSV
-    search_path = ARTIFACTS_DIR / "patchtst_search.csv"
-    if search_path.exists():
-        try:
-            df = pd.read_csv(search_path)
-            if "val_wsmape" in df.columns:
-                df = df[df["val_wsmape"].notna()]
-                if not df.empty:
-                    row = df.loc[df["val_wsmape"].idxmin()]
-                    params = {
-                        **PATCH_PARAMS,
-                        "patch_len": int(row["patch_len"]),
-                        "stride": int(row["patch_len"]),
-                        "lr": float(row["lr"]),
-                        "scaler": row["scaler"],
-                    }
-                    return params, int(row["input_len"])
-        except Exception as e:  # pragma: no cover - best effort
-            logging.warning("Failed to parse %s: %s", search_path, e)
-
-    # 2) Optuna artifact or tuner output
-    best_path = Path(OPTUNA_DIR) / "patchtst_best.json"
-    if not best_path.exists():
-        alt_path = ARTIFACTS_DIR / "patchtst" / "best_params.json"
-        if alt_path.exists():
-            best_path = alt_path
-    try:
-        with best_path.open("r", encoding="utf-8") as f:
-            patch_best = json.load(f)
-        patch_best.setdefault("stride", patch_best.get("patch_len", PATCH_PARAMS["patch_len"]))
-        input_len = patch_best.pop("input_len", None)
-        return {**PATCH_PARAMS, **patch_best}, input_len
-    except Exception as e:  # pragma: no cover - best effort
-        logging.warning("Failed to load PatchTST params from %s: %s", best_path, e)
-        return PATCH_PARAMS, None
-
-
-def load_best_params(model_name: str) -> tuple[dict, int | None]:
-    """Dispatch to a model-specific parameter loader.
-
-    Parameters
-    ----------
-    model_name : str
-        Name of the model whose parameters should be loaded.
-
-    Returns
-    -------
-    params : dict
-        Best-known parameters for ``model_name``. Empty when no loader exists.
-    input_len : int | None
-        Optional lookback length provided by the loader.
-    """
-
-    loaders = {
-        "patchtst": _load_patchtst_params,
-    }
-    loader = loaders.get(model_name)
-    if loader is None:
-        logging.info("No specialized loader for %s; using empty parameters", model_name)
-        return {}, None
-    return loader()
-
-
 def report_oof_metrics(oof_df, model_name: str) -> None:
     """Compute and log OOF metrics for a model."""
     metrics = compute_oof_metrics(oof_df)
@@ -259,11 +173,11 @@ def run_training(ctx: PipelineContext) -> None:
     params_cls_name = trainer_cls.__name__.replace("Trainer", "Params")
     params_cls = getattr(params_module, params_cls_name)
     params_obj = params_cls(**ctx.params)
-    init_kwargs = {"params": params_obj, "model_dir": ctx.cfg.model_dir, "device": ctx.device}
+    trainer = trainer_cls(params=params_obj, model_dir=ctx.cfg.model_dir, device=ctx.device)
     if ctx.model_name == "patchtst":
-        L_used = ctx.input_len if ctx.input_len is not None else L
-        init_kwargs.update({"L": L_used, "H": H})
-    trainer = trainer_cls(**init_kwargs)
+        if ctx.input_len is not None:
+            trainer.L = ctx.input_len
+        trainer.H = H
     trainer.train(X_train, y_train, series_ids, label_dates, ctx.cfg)
     ctx.oof_df = trainer.get_oof()
     model_path = ARTIFACTS_DIR / "models" / f"{ctx.model_name}.pt"

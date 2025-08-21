@@ -4,11 +4,10 @@ import os
 import glob
 import re
 from pathlib import Path
-import numpy as np
 import pandas as pd
 import argparse
 
-from LGHackerton.preprocess import Preprocessor, L, H
+from LGHackerton.preprocess import Preprocessor
 from LGHackerton.models import ModelRegistry
 from LGHackerton.utils.device import select_device
 from LGHackerton.config.default import (
@@ -16,13 +15,12 @@ from LGHackerton.config.default import (
     ARTIFACTS_PATH,
     PRED_OUT,
     SUBMISSION_OUT,
-    PATCH_PARAMS,
     TRAIN_CFG,
 )
 from LGHackerton.utils.seed import set_seed
-from LGHackerton.preprocess import inverse_symmetric_transform
 from LGHackerton.postprocess import aggregate_predictions, convert_to_submission
 from LGHackerton.utils.io import read_table
+from LGHackerton.utils.params import load_best_params
 import importlib, inspect
 
 
@@ -58,32 +56,25 @@ def main():
     if params_cls is None:
         raise RuntimeError(f"No Params dataclass found in {module.__name__}")
 
-    params = params_cls(**PATCH_PARAMS)
-    pt = trainer_cls(params=params, L=L, H=H, model_dir=cfg.model_dir, device=device)
+    params_dict, _ = load_best_params(model_name)
+    params = params_cls(**params_dict)
+    pt = trainer_cls(params=params, model_dir=cfg.model_dir, device=device)
     pt.load(os.path.join(cfg.model_dir, f"{model_name}.pt"))
 
     model_outputs = []
 
     single_outputs = []
-    col_suffix = getattr(trainer_cls, "prediction_column_name", model_name)
-    y_col = f"yhat_{col_suffix}"
     for path in sorted(glob.glob(TEST_GLOB)):
         df_eval_raw = read_table(path)
         df_eval_full = pp.transform_eval(df_eval_raw)
 
-        X_eval, sids, _ = trainer_cls.build_eval_dataset(pp, df_eval_full)
-        sid_idx = np.array([pt.id2idx.get(sid, 0) for sid in sids])
-        y_pred = pt.predict(X_eval, sid_idx)
-        reps = np.repeat(sids, H)
-        hs = np.tile(np.arange(1, H + 1), len(sids))
-        out = pd.DataFrame({"series_id": reps, "h": hs, y_col: y_pred.reshape(-1)})
-
-        out[y_col] = inverse_symmetric_transform(out[y_col].values)
+        eval_df = trainer_cls.build_eval_dataset(pp, df_eval_full)
+        pred_df = pt.predict_df(eval_df)
 
         prefix = re.search(r"(TEST_\d+)", os.path.basename(path)).group(1)
-        out["test_id"] = prefix
-        out["date"] = out["h"].map(lambda h: f"{prefix}+{h}일")
-        single_outputs.append(out)
+        pred_df["test_id"] = prefix
+        pred_df["date"] = pred_df["h"].map(lambda h: f"{prefix}+{h}일")
+        single_outputs.append(pred_df)
 
     pred_df = pd.concat(single_outputs, ignore_index=True)
     model_outputs.append(pred_df)

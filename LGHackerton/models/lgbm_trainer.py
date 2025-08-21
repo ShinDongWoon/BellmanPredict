@@ -73,6 +73,11 @@ class LGBMTrainer(BaseModel):
         return df_train, y, series_ids, label_dates
 
     @staticmethod
+    def build_eval_dataset(pp: Preprocessor, df_full: pd.DataFrame):
+        """Build evaluation dataset for prediction."""
+        return pp.build_lgbm_eval(df_full)
+
+    @staticmethod
     def _compute_label_date(df: pd.DataFrame, date_col: str, h_col: str) -> pd.Series:
         return pd.to_datetime(df[date_col]) + pd.to_timedelta(df[h_col].astype(int), unit="D")
 
@@ -436,6 +441,10 @@ class LGBMTrainer(BaseModel):
         out = dfe[["series_id", "h"]].copy()
         out["yhat_lgbm"] = preds
         return out
+
+    def predict_df(self, eval_df: pd.DataFrame) -> pd.DataFrame:
+        """Predict and return a dataframe with LightGBM forecasts."""
+        return self.predict(eval_df)
 
     def get_oof(self) -> pd.DataFrame:
         return pd.DataFrame(self.oof_records)
