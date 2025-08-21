@@ -672,13 +672,21 @@ class PatchTSTTrainer(BaseModel):
         if not TORCH_OK: return
         import torch
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        index=[]
+        index = []
         for i, m in enumerate(self.models):
             fpath = os.path.join(self.model_dir, f"patchtst_fold{i}.pt")
             torch.save(m.state_dict(), fpath)
             index.append(os.path.basename(fpath))
-        with open(path.replace(".pt",".json"),"w",encoding="utf-8") as f:
-            json.dump({"params":self.model_params,"L":self.L,"H":self.H,"index":index,"id2idx":self.id2idx},f,ensure_ascii=False,indent=2)
+        meta = {
+            "params": self.model_params,
+            "L": self.L,
+            "H": self.H,
+            "index": index,
+            "id2idx": self.id2idx,
+        }
+        with open(path.replace(".pt", ".json"), "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        torch.save(meta, path)
     def load(self, path:str)->None:
         self._ensure_torch(); import torch, json, os
         meta=path.replace(".pt",".json")
