@@ -661,13 +661,15 @@ class PatchTSTTrainer(BaseModel):
                 mu = mu.to(self.device, non_blocking=pin)
                 std = std.to(self.device, non_blocking=pin)
                 preds = [m(xb, sb) for m in self.models]
-                prob = torch.stack([p[0] for p in preds]).mean(0)
-                reg = torch.stack([p[1] for p in preds]).mean(0)
-                if self.params.scaler == "revin":
-                    reg = reg * std.unsqueeze(1) + mu.unsqueeze(1)
-                out = combine_predictions(
-                    prob, reg, self.params.kappa, self.params.epsilon_leaky
-                )
+                y_preds = []
+                for prob, reg in preds:
+                    if self.params.scaler == "revin":
+                        reg = reg * std.unsqueeze(1) + mu.unsqueeze(1)
+                    y_pred = combine_predictions(
+                        prob, reg, self.params.kappa, self.params.epsilon_leaky
+                    )
+                    y_preds.append(y_pred)
+                out = torch.stack(y_preds).mean(0)
                 outs.append(out.cpu().numpy())
         yhat = np.clip(np.concatenate(outs, 0), 0, None)
         return yhat
