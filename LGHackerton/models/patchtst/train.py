@@ -119,11 +119,19 @@ def build_loss(name: str, alpha: float = 0.5, eps: float = 1e-8, reduction: str 
     raise ValueError(f"Unknown loss '{name}'")
 
 
-def combine_predictions(clf_prob: Tensor, reg_pred: Tensor) -> Tensor:
-    """Combine classifier probability with regression output.
+def combine_predictions(
+    clf_prob: Tensor, reg_pred: Tensor, kappa: float, epsilon_leaky: float
+) -> Tensor:
+    r"""Combine classifier probability with conditional mean adjustment.
 
-    The final demand prediction is obtained by multiplying the probability of
-    non-zero sales with the predicted quantity.
+    The regression prediction ``reg_pred`` is interpreted as the unconditional
+    mean :math:`\mu_u`.  The conditional mean under zero truncation is
+    calculated using ``kappa`` and then scaled by the classifier probability
+    ``clf_prob`` with a small ``epsilon_leaky`` to avoid collapse::
+
+        P0 = (kappa / (kappa + mu_u)) ** kappa
+        cond_mean = mu_u / max(1 - P0, 1e-6)
+        y_hat = ((1 - eps) * p + eps) * cond_mean
 
     Parameters
     ----------
@@ -131,20 +139,31 @@ def combine_predictions(clf_prob: Tensor, reg_pred: Tensor) -> Tensor:
         Probability output of the zero/non-zero classifier where higher values
         indicate non-zero demand.
     reg_pred:
-        Regression model predictions for demand.
+        Regression model predictions corresponding to the unconditional mean
+        ``mu_u``.
+    kappa:
+        Shape parameter controlling the zero probability ``P0``.
+    epsilon_leaky:
+        Small constant added to the classifier probability.
 
     Returns
     -------
     Tensor
-        Final demand prediction after probabilistic gating.
+        Final demand prediction after conditional mean adjustment.
     """
-    return clf_prob * reg_pred
+    k = torch.as_tensor(kappa, dtype=reg_pred.dtype, device=reg_pred.device)
+    eps = torch.as_tensor(epsilon_leaky, dtype=reg_pred.dtype, device=reg_pred.device)
+    p0 = torch.pow(k / (k + reg_pred), k)
+    cond_mean = reg_pred / torch.clamp(1.0 - p0, min=1e-6)
+    return ((1 - eps) * clf_prob + eps) * cond_mean
 
 
 def weighted_smape_oof(
     y_true: Tensor,
     clf_prob: Tensor,
     reg_pred: Tensor,
+    kappa: float,
+    epsilon_leaky: float,
     w: Optional[Tensor] = None,
 ) -> Tensor:
     """Compute weighted sMAPE for combined OOF predictions.
@@ -156,11 +175,15 @@ def weighted_smape_oof(
     clf_prob:
         Probability estimates from the classifier.
     reg_pred:
-        Regression predictions.
+        Regression predictions representing ``mu_u``.
+    kappa:
+        Shape parameter for the zero probability computation.
+    epsilon_leaky:
+        Small constant added to the classifier probability.
     w:
         Optional sample weights.
     """
-    final_pred = combine_predictions(clf_prob, reg_pred)
+    final_pred = combine_predictions(clf_prob, reg_pred, kappa, epsilon_leaky)
     loss_fn = WeightedSMAPELoss(reduction="mean")
     return loss_fn(final_pred, y_true, w=w)
 
