@@ -320,7 +320,10 @@ class PatchTSTTrainer(BaseModel):
     @staticmethod
     def build_dataset(pp: Preprocessor, df_full: pd.DataFrame, input_len: int | None = None):
         if input_len is not None:
-            pp.windowizer = SampleWindowizer(lookback=input_len, horizon=H)
+            horizon = pp.windowizer.H
+            pp.windowizer = SampleWindowizer(
+                lookback=input_len, horizon=horizon, guard=pp.guard
+            )
         return pp.build_patch_train(df_full)
 
     @staticmethod
