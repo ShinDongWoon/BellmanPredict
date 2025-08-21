@@ -358,8 +358,8 @@ class PatchTSTTuner(HyperparameterTuner):
             return self._best_params
 
         best = dict(study.best_trial.params)
-        self.best_input_len = best.pop("input_len", None)
         best.pop("reg_mode", None)
+        self.best_input_len = best.pop("input_len", None)
         best["stride"] = best.get("patch_len")
         best["num_workers"] = PATCH_PARAMS.get("num_workers", 0)
         params = PatchTSTParams(**best)
