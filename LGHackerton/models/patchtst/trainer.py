@@ -16,7 +16,7 @@ except Exception as _e:
 
 from LGHackerton.models.base_trainer import BaseModel, TrainConfig
 from LGHackerton.utils.metrics import smape, weighted_smape_np, PRIORITY_OUTLETS
-from LGHackerton.preprocess import Preprocessor, L as DEFAULT_L, H as DEFAULT_H, inverse_symmetric_transform
+from LGHackerton.preprocess import Preprocessor, L as DEFAULT_L, H as DEFAULT_H
 from .train import build_loss, combine_predictions
 
 @dataclass
@@ -675,11 +675,10 @@ class PatchTSTTrainer(BaseModel):
         return yhat
 
     def predict_df(self, eval_df):
-        """Return prediction dataframe for PatchTST."""
+        """Return conditional-mean prediction dataframe for PatchTST."""
         X_eval, sids, _ = eval_df
         sid_idx = np.array([self.id2idx.get(sid, 0) for sid in sids])
         y_pred = self.predict(X_eval, sid_idx)
-        y_pred = inverse_symmetric_transform(y_pred)
         reps = np.repeat(sids, self.H)
         hs = np.tile(np.arange(1, self.H + 1), len(sids))
         out = pd.DataFrame({"series_id": reps, "h": hs, "yhat_patch": y_pred.reshape(-1)})
