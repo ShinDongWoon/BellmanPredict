@@ -239,6 +239,9 @@ def run_training(ctx: PipelineContext) -> None:
     trainer = trainer_cls(**init_kwargs)
     trainer.train(X_train, y_train, series_ids, label_dates, ctx.cfg)
     ctx.oof_df = trainer.get_oof()
+    model_path = ARTIFACTS_DIR / "models" / f"{ctx.model_name}.pt"
+    if not model_path.exists():
+        raise RuntimeError("model artifact missing")
 
 
 def run_oof_prediction(ctx: PipelineContext) -> None:
@@ -277,12 +280,17 @@ def main():
     parser.add_argument("--trials", type=int, default=20, help="number of Optuna trials")
     parser.add_argument("--timeout", type=int, default=None, help="time limit for tuning (seconds)")
     available = ", ".join(ModelRegistry.available())
-    parser.add_argument("--model", default="patchtst", help=f"model name ({available})")
+    parser.add_argument(
+        "--model",
+        default=None,
+        help=f"model name ({available})",
+    )  # omit to use PatchTST
     parser.set_defaults(show_progress=SHOW_PROGRESS)
 
     args = parser.parse_args()
+    model_name = args.model or ModelRegistry.DEFAULT_MODEL  # default to PatchTST
     try:
-        trainer_cls = ModelRegistry.get(args.model)
+        trainer_cls = ModelRegistry.get(model_name)
     except ValueError as e:
         parser.error(str(e))
 
@@ -301,7 +309,7 @@ def main():
         params=params_dict,
         input_len=input_len,
         device=device,
-        model_name=args.model,
+        model_name=model_name,
         show_progress=args.show_progress,
     )
 

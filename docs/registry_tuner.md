@@ -12,6 +12,21 @@ Requesting an unregistered model raises `ValueError: Unknown model '<name>'. Ava
 `train.py` and `predict.py` convert this into an `argparse` error so users
 receive a concise message.
 
+### 기본 모델: PatchTST
+
+`ModelRegistry.DEFAULT_MODEL` is set to `"patchtst"`. Both `train.py` and
+`predict.py` call `ModelRegistry.get(None)` when the `--model` option is
+omitted, so PatchTST runs by default.
+
+Run the regression test to verify the default pipeline:
+
+```bash
+pytest tests/test_pipeline_patchtst.py -v
+```
+
+Users may skip the `--model` flag entirely; PatchTST will be selected
+automatically.
+
 ### CLI example
 
 ```bash
@@ -82,5 +97,5 @@ flowchart LR
 Verify the PatchTST pipeline remains intact:
 
 ```bash
-pytest tests/test_pipeline_patchtst.py
+pytest tests/test_pipeline_patchtst.py -v
 ```
