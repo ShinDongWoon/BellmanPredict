@@ -17,7 +17,7 @@ except Exception as _e:
 from LGHackerton.models.base_trainer import BaseModel, TrainConfig
 from LGHackerton.utils.metrics import smape, weighted_smape_np, PRIORITY_OUTLETS
 from LGHackerton.preprocess import Preprocessor, L as DEFAULT_L, H as DEFAULT_H, inverse_symmetric_transform
-from .train import build_loss
+from .train import build_loss, combine_predictions
 
 @dataclass
 class PatchTSTParams:
@@ -567,7 +567,9 @@ class PatchTSTTrainer(BaseModel):
                         if self.params.scaler == "revin":
                             out = out * std.unsqueeze(1) + mu.unsqueeze(1)
                             yb = yb * std.unsqueeze(1) + mu.unsqueeze(1)
-                        final = prob * out
+                        final = combine_predictions(
+                            prob, out, self.params.kappa, self.params.epsilon_leaky
+                        )
                         P.append(final.cpu().numpy())
                         T.append(yb.cpu().numpy())
                         S.extend(sb.cpu().tolist())
@@ -613,7 +615,9 @@ class PatchTSTTrainer(BaseModel):
                     if self.params.scaler == "revin":
                         out = out * std.unsqueeze(1) + mu.unsqueeze(1)
                         yb = yb * std.unsqueeze(1) + mu.unsqueeze(1)
-                    final = prob * out
+                    final = combine_predictions(
+                        prob, out, self.params.kappa, self.params.epsilon_leaky
+                    )
                     P.append(final.cpu().numpy())
                     Y.append(yb.cpu().numpy())
                     S.extend(sb.cpu().tolist())
@@ -660,7 +664,9 @@ class PatchTSTTrainer(BaseModel):
                 reg = torch.stack([p[1] for p in preds]).mean(0)
                 if self.params.scaler == "revin":
                     reg = reg * std.unsqueeze(1) + mu.unsqueeze(1)
-                out = prob * reg
+                out = combine_predictions(
+                    prob, reg, self.params.kappa, self.params.epsilon_leaky
+                )
                 outs.append(out.cpu().numpy())
         yhat = np.clip(np.concatenate(outs, 0), 0, None)
         return yhat
