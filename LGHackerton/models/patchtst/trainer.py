@@ -17,7 +17,6 @@ except Exception as _e:
 from LGHackerton.models.base_trainer import BaseModel, TrainConfig
 from LGHackerton.utils.metrics import smape, weighted_smape_np, PRIORITY_OUTLETS
 from LGHackerton.preprocess import Preprocessor, L as DEFAULT_L, H as DEFAULT_H, inverse_symmetric_transform
-from LGHackerton.preprocess.preprocess_pipeline_v1_1 import SampleWindowizer
 from .train import build_loss
 
 @dataclass
@@ -320,10 +319,9 @@ class PatchTSTTrainer(BaseModel):
     @staticmethod
     def build_dataset(pp: Preprocessor, df_full: pd.DataFrame, input_len: int | None = None):
         if input_len is not None:
-            horizon = pp.windowizer.H
-            pp.windowizer = SampleWindowizer(
-                lookback=input_len, horizon=horizon, guard=pp.guard
-            )
+            horizon = getattr(pp.windowizer, "H", DEFAULT_H)
+            pp.windowizer.L = input_len
+            pp.windowizer.H = horizon
         return pp.build_patch_train(df_full)
 
     @staticmethod
