@@ -279,20 +279,29 @@ class PatchTSTTuner(HyperparameterTuner):
                     self.pp.windowizer = SampleWindowizer(lookback=input_len, horizon=H)
                     self._dataset_cache[input_len] = self.pp.build_patch_train(self.df)
                 X, y, series_ids, label_dates = self._dataset_cache[input_len]
+                reg_mode = trial.suggest_categorical("reg_mode", ["light", "strong"])
+                if reg_mode == "light":
+                    dropout = trial.suggest_float("dropout", 0.40, 0.50)
+                    weight_decay = trial.suggest_float(
+                        "weight_decay", 1e-4, 3e-4, log=True
+                    )
+                else:
+                    dropout = trial.suggest_float("dropout", 0.50, 0.60)
+                    weight_decay = trial.suggest_float(
+                        "weight_decay", 3e-4, 5e-4, log=True
+                    )
 
                 params = {
                     "d_model": trial.suggest_categorical("d_model", search.d_model),
                     "n_heads": trial.suggest_categorical("n_heads", search.n_heads),
                     "depth": trial.suggest_int("depth", *search.depth),
                     "patch_len": trial.suggest_categorical("patch_len", search.patch_len),
-                    "dropout": trial.suggest_float("dropout", *search.dropout),
+                    "dropout": dropout,
                     "id_embed_dim": trial.suggest_categorical(
                         "id_embed_dim", search.id_embed_dim
                     ),
                     "lr": trial.suggest_float("lr", *search.lr, log=True),
-                    "weight_decay": trial.suggest_float(
-                        "weight_decay", *search.weight_decay, log=True
-                    ),
+                    "weight_decay": weight_decay,
                     "batch_size": trial.suggest_categorical("batch_size", search.batch_size),
                     "max_epochs": trial.suggest_int("max_epochs", *search.max_epochs),
                     "patience": trial.suggest_int("patience", *search.patience),
@@ -350,6 +359,7 @@ class PatchTSTTuner(HyperparameterTuner):
 
         best = dict(study.best_trial.params)
         self.best_input_len = best.pop("input_len", None)
+        best.pop("reg_mode", None)
         best["stride"] = best.get("patch_len")
         best["num_workers"] = PATCH_PARAMS.get("num_workers", 0)
         params = PatchTSTParams(**best)
