@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 
 def test_pipeline_patchtst(tmp_path):
@@ -42,8 +43,14 @@ def test_pipeline_patchtst(tmp_path):
         "PatchTSTTrainer.load=lambda self, path: None\n"
         "\n"
         "def _predict(self, X, sid_idx):\n"
+        "    k = self.params.kappa\n"
+        "    eps = self.params.epsilon_leaky\n"
         "    import numpy as np\n"
-        "    return np.zeros((len(X), self.H))\n"
+        "    mu = np.full((len(X), self.H), 2.0, dtype=float)\n"
+        "    prob = np.full((len(X), self.H), 0.5, dtype=float)\n"
+        "    p0 = np.power(k / (k + mu), k)\n"
+        "    cond_mean = mu / np.maximum(1.0 - p0, 1e-6)\n"
+        "    return ((1 - eps) * prob + eps) * cond_mean\n"
         "PatchTSTTrainer.predict=_predict\n"
     )
     pt_path.write_text(stub)
@@ -93,3 +100,15 @@ def test_pipeline_patchtst(tmp_path):
         workdir / "LGHackerton" / "data" / "sample_submission.csv", nrows=0
     ).columns
     assert list(sub_df.columns) == list(sample_cols)
+
+    pred_csv = artifacts_dir / "eval_pred.csv"
+    assert pred_csv.exists()
+    pred_df = pd.read_csv(pred_csv)
+    kappa = 1.0
+    eps = 1e-8
+    mu = 2.0
+    prob = 0.5
+    p0 = (kappa / (kappa + mu)) ** kappa
+    cond_mean = mu / (1 - p0)
+    expected = ((1 - eps) * prob + eps) * cond_mean
+    assert pred_df["yhat_patch"].iloc[0] == pytest.approx(expected)
