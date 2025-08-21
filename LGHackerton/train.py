@@ -11,7 +11,7 @@ import numpy as np
 from dataclasses import dataclass, asdict
 from datetime import datetime
 
-from LGHackerton.preprocess import Preprocessor, L, H
+from LGHackerton.preprocess import Preprocessor
 from LGHackerton.models.base_trainer import TrainConfig
 from LGHackerton.models import ModelRegistry
 from LGHackerton.utils.device import select_device
@@ -177,7 +177,7 @@ def run_training(ctx: PipelineContext) -> None:
     if ctx.model_name == "patchtst":
         if ctx.input_len is not None:
             trainer.L = ctx.input_len
-        trainer.H = H
+        trainer.H = ctx.preprocessor.windowizer.H
     trainer.train(X_train, y_train, series_ids, label_dates, ctx.cfg)
     ctx.oof_df = trainer.get_oof()
     model_path = ARTIFACTS_DIR / "models" / f"{ctx.model_name}.pt"
