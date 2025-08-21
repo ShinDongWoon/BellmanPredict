@@ -23,6 +23,7 @@ from LGHackerton.utils.diagnostics import (
     plot_residuals,
 )
 from LGHackerton.utils.metrics import compute_oof_metrics
+from LGHackerton.utils.io import read_table
 from LGHackerton.config.default import (
     TRAIN_PATH,
     ARTIFACTS_PATH,
@@ -115,13 +116,6 @@ def _patch_patchtst_logging(cfg: TrainConfig) -> None:
             "No PatchTST fold logging hooks found; fold information will not be logged",
             stacklevel=2,
         )
-
-def _read_table(path: str) -> pd.DataFrame:
-    if path.lower().endswith(".csv"):
-        return pd.read_csv(path)
-    if path.lower().endswith((".xls", ".xlsx")):
-        return pd.read_excel(path)
-    raise ValueError("Unsupported file type. Use .csv or .xlsx")
 
 
 def _load_patchtst_params() -> tuple[dict, int | None]:
@@ -217,7 +211,7 @@ def report_oof_metrics(oof_df, model_name: str) -> None:
 
 def run_preprocess(ctx: PipelineContext) -> None:
     """Run preprocessing and store artifacts in the context."""
-    df_train_raw = _read_table(TRAIN_PATH)
+    df_train_raw = read_table(TRAIN_PATH)
     pp = Preprocessor(show_progress=ctx.show_progress)
     df_full = pp.fit_transform_train(df_train_raw)
     pp.save(ARTIFACTS_PATH)
