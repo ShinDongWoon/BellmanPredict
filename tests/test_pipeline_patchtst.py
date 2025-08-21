@@ -50,13 +50,15 @@ def test_pipeline_patchtst(tmp_path):
 
     conv_path = workdir / "LGHackerton" / "postprocess" / "convert.py"
     conv_path.write_text(
-        "import pandas as pd\n\n"
+        "import pandas as pd\n"
+        "from LGHackerton.config.default import SAMPLE_SUB_PATH\n\n"
         "def aggregate_predictions(pred_dfs, weights=None, how='mean'):\n"
         "    df = pred_dfs[0][['series_id','yhat_patch']].copy()\n"
         "    df.rename(columns={'series_id':'id','yhat_patch':'y'}, inplace=True)\n"
         "    return df\n\n"
         "def convert_to_submission(pred_df, weights=None, how='mean'):\n"
-        "    return pred_df[['id','y']]\n"
+        "    sample_cols = pd.read_csv(SAMPLE_SUB_PATH, nrows=0).columns\n"
+        "    return pd.DataFrame([[0]*len(sample_cols)], columns=sample_cols)\n"
     )
 
     env = {**os.environ, "PYTHONPATH": str(workdir)}
@@ -87,4 +89,7 @@ def test_pipeline_patchtst(tmp_path):
     assert sub_csv.exists()
 
     sub_df = pd.read_csv(sub_csv)
-    assert {"id", "y"}.issubset(sub_df.columns)
+    sample_cols = pd.read_csv(
+        workdir / "LGHackerton" / "data" / "sample_submission.csv", nrows=0
+    ).columns
+    assert list(sub_df.columns) == list(sample_cols)

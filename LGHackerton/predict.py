@@ -16,6 +16,7 @@ from LGHackerton.config.default import (
     PRED_OUT,
     SUBMISSION_OUT,
     TRAIN_CFG,
+    SAMPLE_SUB_PATH,
 )
 from LGHackerton.utils.seed import set_seed
 from LGHackerton.postprocess import aggregate_predictions, convert_to_submission
@@ -94,8 +95,9 @@ def main():
     if not sub_path.exists():
         raise RuntimeError("submission file missing")
     out_df = pd.read_csv(sub_path)
-    if not {"id", "y"}.issubset(out_df.columns):
-        raise RuntimeError("submission columns missing")
+    sample_cols = pd.read_csv(SAMPLE_SUB_PATH, nrows=0).columns
+    if list(out_df.columns) != list(sample_cols):
+        raise RuntimeError("submission columns mismatch")
 
 if __name__ == "__main__":
     main()
