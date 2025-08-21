@@ -22,14 +22,8 @@ from LGHackerton.config.default import (
 from LGHackerton.utils.seed import set_seed
 from src.data.preprocess import inverse_symmetric_transform
 from LGHackerton.postprocess import aggregate_predictions, convert_to_submission
+from LGHackerton.utils.io import read_table
 import importlib, inspect
-
-def _read_table(path: str) -> pd.DataFrame:
-    if path.lower().endswith(".csv"):
-        return pd.read_csv(path, encoding="utf-8-sig")
-    if path.lower().endswith((".xls", ".xlsx")):
-        return pd.read_excel(path)
-    raise ValueError("Unsupported file type. Use .csv or .xlsx")
 
 
 def main():
@@ -74,7 +68,7 @@ def main():
     col_suffix = getattr(trainer_cls, "prediction_column_name", model_name)
     y_col = f"yhat_{col_suffix}"
     for path in sorted(glob.glob(TEST_GLOB)):
-        df_eval_raw = _read_table(path)
+        df_eval_raw = read_table(path)
         df_eval_full = pp.transform_eval(df_eval_raw)
 
         X_eval, sids, _ = trainer_cls.build_eval_dataset(pp, df_eval_full)
