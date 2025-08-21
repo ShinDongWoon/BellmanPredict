@@ -119,6 +119,37 @@ class PatchTSTTuner(HyperparameterTuner):
         for field in required:
             if field not in params:
                 raise TypeError(f"Missing field: {field}")
+        s = self.search_space
+        choice_fields = {
+            "d_model": s.d_model,
+            "n_heads": s.n_heads,
+            "patch_len": s.patch_len,
+            "stride": s.stride,
+            "id_embed_dim": s.id_embed_dim,
+            "batch_size": s.batch_size,
+        }
+        for name, choices in choice_fields.items():
+            val = params.get(name)
+            if not isinstance(val, int) or val not in choices:
+                raise ValueError(f"{name} out of range: {val}")
+        range_fields = {
+            "depth": s.depth,
+            "max_epochs": s.max_epochs,
+            "patience": s.patience,
+        }
+        for name, (lo, hi) in range_fields.items():
+            val = params.get(name)
+            if not isinstance(val, int) or not (lo <= val <= hi):
+                raise ValueError(f"{name} out of range: {val}")
+        float_fields = {
+            "dropout": s.dropout,
+            "lr": s.lr,
+            "weight_decay": s.weight_decay,
+        }
+        for name, (lo, hi) in float_fields.items():
+            val = params.get(name)
+            if not isinstance(val, (float, int)) or not (lo <= float(val) <= hi):
+                raise ValueError(f"{name} out of range: {val}")
         if params.get("patch_len") != params.get("stride"):
             raise ValueError(f"stride out of range: {params.get('stride')}")
 

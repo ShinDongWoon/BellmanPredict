@@ -12,6 +12,16 @@ Requesting an unregistered model raises `ValueError: Unknown model '<name>'. Ava
 `train.py` and `predict.py` convert this into an `argparse` error so users
 receive a concise message.
 
+### CLI example
+
+```bash
+$ python LGHackerton/train.py --model unknown
+usage: train.py [-h] [--progress | --no-progress] [--skip-tune]
+                [--force-tune] [--trials TRIALS] [--timeout TIMEOUT]
+                [--model MODEL]
+train.py: error: Unknown model 'unknown'. Available models: patchtst, lgbm, tft
+```
+
 ## TunerRegistry and HyperparameterTuner (`LGHackerton/tuning/registry.py`, `LGHackerton/tuning/base.py`)
 
 `TunerRegistry.get(name)` returns a class implementing the

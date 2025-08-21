@@ -218,7 +218,11 @@ def run_tuning(ctx: PipelineContext, skip_tune: bool, force_tune: bool) -> None:
 
 def run_training(ctx: PipelineContext) -> None:
     """Train model and store OOF predictions in the context."""
-    trainer_cls = ModelRegistry.get(ctx.model_name)
+    try:
+        trainer_cls = ModelRegistry.get(ctx.model_name)
+    except ValueError as e:
+        logging.error(str(e))
+        raise
     X_train, y_train, series_ids, label_dates = trainer_cls.build_dataset(
         ctx.preprocessor, ctx.df_full, ctx.input_len
     )

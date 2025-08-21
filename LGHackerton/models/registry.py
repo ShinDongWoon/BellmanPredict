@@ -13,13 +13,12 @@ class ModelRegistry:
 
     @classmethod
     def get(cls, name: str):
-        try:
-            return cls._REGISTRY[name]
-        except KeyError as e:  # pragma: no cover - user facing
+        if name not in cls._REGISTRY:
             available = ", ".join(sorted(cls._REGISTRY))
             raise ValueError(
                 f"Unknown model '{name}'. Available models: {available}"
-            ) from e
+            )
+        return cls._REGISTRY[name]
 
     @classmethod
     def available(cls):

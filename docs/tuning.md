@@ -25,6 +25,13 @@ Tuners validate their inputs:
 - Values outside allowed ranges raise `ValueError` formatted as
   `"<field> out of range: <value>"`.
 - Requesting a tuner for an unsupported model prints `Unknown tuner for model`.
+- Selecting an unknown model via the CLI triggers a `ValueError` which surfaces
+  as an `argparse` message:
+
+```bash
+$ python LGHackerton/train.py --model unknown
+train.py: error: Unknown model 'unknown'. Available models: patchtst, lgbm, tft
+```
 
 ## Caching
 
