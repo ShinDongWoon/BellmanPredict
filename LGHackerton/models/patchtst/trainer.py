@@ -618,7 +618,8 @@ class PatchTSTTrainer(BaseModel):
                     final = combine_predictions(
                         prob, out, self.params.kappa, self.params.epsilon_leaky
                     )
-                    P.append(final.cpu().numpy())
+                    final = final.cpu()
+                    P.append(final.numpy())
                     Y.append(yb.cpu().numpy())
                     S.extend(sb.cpu().tolist())
             y_pred = np.clip(np.concatenate(P, 0), 0, None)
