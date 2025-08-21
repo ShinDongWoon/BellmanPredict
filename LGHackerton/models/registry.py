@@ -1,18 +1,21 @@
 """Simple registry for model trainers."""
 from __future__ import annotations
-from typing import Type, Dict
+from typing import Dict, Type
 
 
 class ModelRegistry:
     """Registry mapping model names to trainer classes."""
     _REGISTRY: Dict[str, Type] = {}
+    DEFAULT_MODEL = "patchtst"
 
     @classmethod
     def register(cls, name: str, trainer_cls: Type) -> None:
         cls._REGISTRY[name] = trainer_cls
 
     @classmethod
-    def get(cls, name: str):
+    def get(cls, name: str | None = None):
+        if name is None:
+            name = cls.DEFAULT_MODEL
         if name not in cls._REGISTRY:
             available = ", ".join(sorted(cls._REGISTRY))
             raise ValueError(

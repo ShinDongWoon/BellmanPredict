@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import glob
 import re
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import argparse
@@ -34,10 +35,15 @@ def _read_table(path: str) -> pd.DataFrame:
 def main():
     parser = argparse.ArgumentParser()
     available = ", ".join(ModelRegistry.available())
-    parser.add_argument("--model", default="patchtst", help=f"model name ({available})")
+    parser.add_argument(
+        "--model",
+        default=None,
+        help=f"model name ({available})",
+    )  # omit to use PatchTST
     args = parser.parse_args()
+    model_name = args.model or ModelRegistry.DEFAULT_MODEL  # default to PatchTST
     try:
-        trainer_cls = ModelRegistry.get(args.model)
+        trainer_cls = ModelRegistry.get(model_name)
     except ValueError as e:
         parser.error(str(e))
 
@@ -50,7 +56,7 @@ def main():
     set_seed(cfg.seed)
 
     pt = trainer_cls(params=PatchTSTParams(**PATCH_PARAMS), L=L, H=H, model_dir=cfg.model_dir, device=device)
-    pt.load(os.path.join(cfg.model_dir, f"{args.model}.pt"))
+    pt.load(os.path.join(cfg.model_dir, f"{model_name}.pt"))
 
     model_outputs = []
 
@@ -87,6 +93,13 @@ def main():
     all_pred = aggregate_predictions(model_outputs)
     submission_df = convert_to_submission(all_pred)
     submission_df.to_csv(SUBMISSION_OUT, index=False, encoding="utf-8-sig")
+
+    sub_path = Path(SUBMISSION_OUT)
+    if not sub_path.exists():
+        raise RuntimeError("submission file missing")
+    out_df = pd.read_csv(sub_path)
+    if not {"id", "y"}.issubset(out_df.columns):
+        raise RuntimeError("submission columns missing")
 
 if __name__ == "__main__":
     main()
