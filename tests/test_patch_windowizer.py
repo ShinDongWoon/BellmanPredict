@@ -60,3 +60,32 @@ def test_patch_windowizer_dynamic_static():
     np.testing.assert_allclose(X_eval[0], expected_eval)
     assert sids_eval[0] == "A"
     assert dates_eval.shape == (1,)
+
+
+def test_patch_windowizer_static_multi_series():
+    dates = pd.date_range("2020-01-01", periods=4, freq="D")
+    records = []
+    for sid, s_val in [("A", 1.0), ("B", 2.0)]:
+        for i, d in enumerate(dates):
+            records.append(
+                {
+                    SERIES_COL: sid,
+                    DATE_COL: d,
+                    SALES_COL: float(i + 1),
+                    SALES_FILLED_COL: float(i + 1),
+                    "feat_dyn": float(i),
+                    "feat_static": s_val,
+                }
+            )
+    df = pd.DataFrame(records)
+    feature_cols = ["feat_dyn", "feat_static"]
+    static_cols = ["feat_static"]
+
+    win = SampleWindowizer(lookback=2, horizon=1)
+    X, Y, sids, dates, dyn_idx, stat_idx = win.build_patch_train(
+        df, feature_cols, static_cols
+    )
+    static_idx = stat_idx["feat_static"]
+    for x_window, sid in zip(X, sids):
+        expected = 1.0 if sid == "A" else 2.0
+        np.testing.assert_allclose(x_window[:, static_idx], expected)

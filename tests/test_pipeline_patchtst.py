@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+from LGHackerton.preprocess.preprocess_pipeline_v1_1 import L
 
 
 def test_pipeline_patchtst(tmp_path):
@@ -32,6 +34,8 @@ def test_pipeline_patchtst(tmp_path):
         "    import os\n"
         "    os.makedirs(self.model_dir, exist_ok=True)\n"
         "    open(os.path.join(self.model_dir, 'patchtst.pt'), 'wb').close()\n"
+        "    with open(os.path.join(self.model_dir, 'window_shape.txt'), 'w') as f:\n"
+        "        f.write(f'{X_train.shape[1]},{X_train.shape[2]}')\n"
         "    self.oof_records = [{'series_id': 'A::0', 'y': 0.0, 'yhat': 0.0}]\n"
         "PatchTSTTrainer.train=_train\n"
         "\n"
@@ -82,6 +86,11 @@ def test_pipeline_patchtst(tmp_path):
     model_path = artifacts_dir / "models" / "patchtst.pt"
     assert model_path.exists()
     assert (artifacts_dir / "preprocess_artifacts.pkl").exists()
+    shape_file = artifacts_dir / "models" / "window_shape.txt"
+    assert shape_file.exists()
+    L_val, C_in = map(int, shape_file.read_text().split(","))
+    assert L_val == L
+    assert C_in > 1
 
     subprocess.run(
         [sys.executable, "LGHackerton/predict.py"],

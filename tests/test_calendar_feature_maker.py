@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -78,6 +79,18 @@ def test_dow_modes(mode):
         assert "dow_sin" not in out.columns and "dow_cos" not in out.columns
 
 
+def test_dow_cyclical_features_values():
+    dates = pd.to_datetime(["2020-01-01", "2020-01-02", "2020-01-03"])
+    df = pd.DataFrame({DATE_COL: dates, SHOP_COL: "A"})
+    out = CalendarFeatureMaker().fit(df).transform(df)
+    assert {"dow_sin", "dow_cos"}.issubset(out.columns)
+    dow = df[DATE_COL].dt.weekday
+    expected_sin = np.sin(2 * np.pi * dow / 7)
+    expected_cos = np.cos(2 * np.pi * dow / 7)
+    np.testing.assert_allclose(out["dow_sin"].to_numpy(), expected_sin)
+    np.testing.assert_allclose(out["dow_cos"].to_numpy(), expected_cos)
+
+
 def test_holiday_distance_features():
     df = _sample_df()
 
@@ -89,7 +102,7 @@ def test_holiday_distance_features():
             }
 
     out = (
-        CalendarFeatureMaker(holiday_provider=DummyHolidayProvider(), dow_mode="cyclical")
+        CalendarFeatureMaker(holiday_provider=DummyHolidayProvider())
         .fit(df)
         .transform(df)
     )
