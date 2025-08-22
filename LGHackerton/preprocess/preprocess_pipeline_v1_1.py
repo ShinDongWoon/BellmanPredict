@@ -17,7 +17,7 @@ import math
 import pickle
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Tuple, Optional, List, Iterable
+from typing import Dict, Tuple, Optional, List, Iterable, Literal
 
 import numpy as np
 import pandas as pd
@@ -255,11 +255,13 @@ class CalendarFeatureMaker:
         cyclical: bool = True,
         keep_months: Optional[Iterable[int]] = None,
         keep_woys: Optional[Iterable[int]] = None,
+        dow_mode: Literal["integer", "cyclical", "embed"] = "cyclical",
     ):
         self.holiday_provider = holiday_provider or HolidayProvider()
         self.cyclical = cyclical
         self.keep_months = set(keep_months) if keep_months is not None else None
         self.keep_woys = set(keep_woys) if keep_woys is not None else None
+        self.dow_mode = dow_mode
         self._holiday_cache: set = set()
         self._woy_cols: List[str] = []
         self._month_cols: List[str] = []
@@ -288,32 +290,25 @@ class CalendarFeatureMaker:
             if c in df.columns
         ]
         self._promo_col = promo_candidates[0] if promo_candidates else None
+        base = ["year", "day"]
+        if self.dow_mode == "cyclical":
+            base.extend(["dow_sin", "dow_cos"])
+        else:
+            base.append("dow")
+        base.extend(
+            [
+                "is_weekend",
+                "is_month_start",
+                "is_month_end",
+                "is_holiday",
+                "is_priority_outlet",
+            ]
+        )
         if self.cyclical:
             cyc_cols = ["month_sin", "month_cos", "woy_sin", "woy_cos"]
-            self._feature_names = [
-                "year",
-                "day",
-                "dow",
-                "is_weekend",
-                "is_month_start",
-                "is_month_end",
-                "is_holiday",
-                "is_priority_outlet",
-                *cyc_cols,
-            ]
+            self._feature_names = [*base, *cyc_cols]
         else:
-            self._feature_names = [
-                "year",
-                "day",
-                "dow",
-                "is_weekend",
-                "is_month_start",
-                "is_month_end",
-                "is_holiday",
-                "is_priority_outlet",
-                *self._month_cols,
-                *self._woy_cols,
-            ]
+            self._feature_names = [*base, *self._month_cols, *self._woy_cols]
         if self._promo_col is not None:
             self._feature_names.append("is_promo")
         return self
@@ -326,6 +321,11 @@ class CalendarFeatureMaker:
         d["is_weekend"] = d["dow"].isin([5, 6]).astype(np.int8)
         d["is_month_start"] = d[DATE_COL].dt.is_month_start.astype(np.int8)
         d["is_month_end"] = d[DATE_COL].dt.is_month_end.astype(np.int8)
+
+        if self.dow_mode == "cyclical":
+            d["dow_sin"] = np.sin(2 * np.pi * d["dow"] / 7)
+            d["dow_cos"] = np.cos(2 * np.pi * d["dow"] / 7)
+            d.drop(columns=["dow"], inplace=True)
 
         # base calendar categories
         if self.cyclical:
@@ -511,25 +511,29 @@ class RichLookupBuilder:
         g["series_cv"] = (g["series_std"] / (g["series_base_mean"] + 1e-9)).astype(float)
         self.base_table = g[[SERIES_COL, "series_base_mean", "series_cv"]].copy()
 
-        # dow lookup: per (series_id, dow) mean
-        if "dow" not in df_train.columns:
-            raise ValueError("Calendar features required before RichLookupBuilder.fit")
-        gd = (
-            df_train.groupby([SERIES_COL, "dow"])[SALES_COL]
-            .mean()
-            .reset_index()
-            .rename(columns={SALES_COL: "series_dow_mean"})
-        )
-        self.dow_table = gd
+        # dow lookup: per (series_id, dow) mean if available
+        if "dow" in df_train.columns:
+            gd = (
+                df_train.groupby([SERIES_COL, "dow"])[SALES_COL]
+                .mean()
+                .reset_index()
+                .rename(columns={SALES_COL: "series_dow_mean"})
+            )
+            self.dow_table = gd
+        else:
+            self.dow_table = None
 
-        vprint(f"[Rich.fit] base_rows={len(self.base_table)}  dow_rows={len(self.dow_table)}")
+        vprint(
+            f"[Rich.fit] base_rows={len(self.base_table)}  dow_rows={len(self.dow_table) if self.dow_table is not None else 0}"
+        )
         return self
 
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
-        if self.base_table is None or self.dow_table is None:
+        if self.base_table is None:
             raise RuntimeError("RichLookupBuilder not fit.")
         d = df.merge(self.base_table, on=SERIES_COL, how="left")
-        d = d.merge(self.dow_table, on=[SERIES_COL, "dow"], how="left")
+        if self.dow_table is not None and "dow" in df.columns:
+            d = d.merge(self.dow_table, on=[SERIES_COL, "dow"], how="left")
         return d
 
 
@@ -566,6 +570,7 @@ class SampleWindowizer:
         self.L = lookback
         self.H = horizon
         self.guard = guard
+        self.cat_indices: Dict[str, int] = {}
 
     def build_lgbm_train(
             self, df: pd.DataFrame, feature_cols: List[str]
@@ -584,6 +589,9 @@ class SampleWindowizer:
         # Need at least lag_28 available to respect 28-day features
         if "lag_27" not in d.columns:
             raise ValueError("Strict features required before building LGBM train set.")
+
+        # Track categorical feature indices (e.g., for embeddings)
+        self.cat_indices = {c: i for i, c in enumerate(feature_cols) if c == "dow"}
 
         # --- Vectorised target generation -------------------------------------------------
         for h in range(1, self.H + 1):
@@ -626,6 +634,9 @@ class SampleWindowizer:
         if self.guard:
             self.guard.assert_scope({"eval"})
         d = df_eval.sort_values([SERIES_COL, DATE_COL]).copy()
+
+        # Track categorical feature indices (e.g., for embeddings)
+        self.cat_indices = {c: i for i, c in enumerate(feature_cols) if c == "dow"}
         out_rows = []
         gb = d.groupby(SERIES_COL, sort=False)
         total = d[SERIES_COL].nunique()
