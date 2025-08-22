@@ -65,3 +65,24 @@ def test_dow_modes(mode):
     else:
         assert "dow" in out.columns
         assert "dow_sin" not in out.columns and "dow_cos" not in out.columns
+
+
+def test_holiday_distance_features():
+    df = _sample_df()
+
+    class DummyHolidayProvider:
+        def compute(self, years):
+            return {
+                pd.Timestamp("2020-01-01").date(),
+                pd.Timestamp("2020-02-05").date(),
+            }
+
+    out = (
+        CalendarFeatureMaker(holiday_provider=DummyHolidayProvider(), dow_mode="cyclical")
+        .fit(df)
+        .transform(df)
+    )
+
+    assert {"days_since_holiday", "days_to_next_holiday"}.issubset(out.columns)
+    assert out["days_since_holiday"].tolist() == [0, 7, 0, 7]
+    assert out["days_to_next_holiday"].tolist() == [0, 28, 0, 9999]
