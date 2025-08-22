@@ -507,12 +507,14 @@ class StrictFeatureMaker:
         return d
 
 
+
 class RichLookupBuilder:
     """
-    Precompute per-series statistics from TRAIN only, then attach via lookup in any scope.
-    - series_base_mean
-    - series_cv
-    - series_dow_mean (by series_id, dow)
+    Precompute per-series statistics from TRAIN folds only, then attach via
+    lookup in any scope.
+    - ``series_base_mean``: ``log1p`` of mean clipped at ``>=1e-3``
+    - ``series_cv``: ``log1p`` of coefficient of variation clipped at ``<=1e6``
+    - ``series_dow_mean``: per-series weekday mean; centered at transform time
     """
 
     def __init__(self):
@@ -520,14 +522,18 @@ class RichLookupBuilder:
         self.dow_table: Optional[pd.DataFrame] = None
 
     def fit(self, df_train: pd.DataFrame):
-        # base: per-series mean/std -> cv
+        # NOTE: fit on training folds only to avoid leakage
+        # base: per-series mean/std -> coefficient of variation
         g = (
             df_train.groupby(SERIES_COL)[SALES_COL]
             .agg(series_base_mean="mean", series_std="std")
             .reset_index()
         )
-        g["series_cv"] = (g["series_std"] / (g["series_base_mean"] + 1e-9)).astype(float)
-        self.base_table = g[[SERIES_COL, "series_base_mean", "series_cv"]].copy()
+        g["series_base_raw"] = g["series_base_mean"]  # store raw mean for later centering
+        g["series_cv"] = g["series_std"] / (g["series_base_raw"] + 1e-9)
+        g["series_base_mean"] = np.log1p(g["series_base_raw"].clip(lower=1e-3))  # log1p + lower clip
+        g["series_cv"] = np.log1p(g["series_cv"].clip(upper=1e6))  # log1p + upper clip
+        self.base_table = g[[SERIES_COL, "series_base_raw", "series_base_mean", "series_cv"]].copy()
 
         # dow lookup: per (series_id, dow) mean if available
         if "dow" in df_train.columns:
@@ -552,6 +558,10 @@ class RichLookupBuilder:
         d = df.merge(self.base_table, on=SERIES_COL, how="left")
         if self.dow_table is not None and "dow" in df.columns:
             d = d.merge(self.dow_table, on=[SERIES_COL, "dow"], how="left")
+            d["dow_effect"] = d["series_dow_mean"] - d["series_base_raw"]  # center weekday mean
+            d = d.drop(columns=["series_dow_mean", "series_base_raw"])  # drop raw means post-centering
+        else:
+            d = d.drop(columns=["series_base_raw"], errors="ignore")  # remove raw base mean
         return d
 
 
