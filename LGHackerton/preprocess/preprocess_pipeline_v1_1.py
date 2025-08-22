@@ -290,7 +290,7 @@ class CalendarFeatureMaker:
             if c in df.columns
         ]
         self._promo_col = promo_candidates[0] if promo_candidates else None
-        base = ["year", "day"]
+        base = ["year"]
         if self.dow_mode == "cyclical":
             base.extend(["dow_sin", "dow_cos"])
         else:
@@ -316,7 +316,6 @@ class CalendarFeatureMaker:
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
         d = df.copy()
         d["year"] = d[DATE_COL].dt.year
-        d["day"] = d[DATE_COL].dt.day
         d["dow"] = d[DATE_COL].dt.weekday  # 0=Mon
         d["is_weekend"] = d["dow"].isin([5, 6]).astype(np.int8)
         d["is_month_start"] = d[DATE_COL].dt.is_month_start.astype(np.int8)

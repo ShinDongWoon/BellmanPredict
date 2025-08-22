@@ -58,6 +58,7 @@ def test_keep_selected_reduces_columns_and_variance():
 def test_dow_modes(mode):
     df = _sample_df()
     out = CalendarFeatureMaker(dow_mode=mode).fit(df).transform(df)
+    assert "day" not in out.columns
     if mode == "cyclical":
         assert "dow" not in out.columns
         assert {"dow_sin", "dow_cos"}.issubset(out.columns)
