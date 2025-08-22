@@ -305,8 +305,10 @@ class PatchTSTTuner(HyperparameterTuner):
                         stat_idx,
                     )
                 X, y, series_ids, label_dates, dyn_idx, stat_idx = self._dataset_cache[input_len]
-                self.pp.patch_dynamic_idx = dyn_idx
-                self.pp.patch_static_idx = stat_idx
+                # Reassign channel index maps to ensure they reflect the cached
+                # dataset's indices even if downstream steps mutate them.
+                self.pp.patch_dynamic_idx = dyn_idx.copy()
+                self.pp.patch_static_idx = stat_idx.copy()
                 reg_mode = trial.suggest_categorical("reg_mode", ["light", "strong"])
                 if reg_mode == "light":
                     dropout = trial.suggest_float("dropout", 0.40, 0.50)
