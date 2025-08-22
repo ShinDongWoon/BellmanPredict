@@ -2,6 +2,7 @@ from __future__ import annotations
 import os, json, warnings
 import numpy as np
 import pandas as pd
+import optuna
 from dataclasses import dataclass, asdict
 from typing import Tuple, Iterable, Optional, List, Any, Dict, Callable
 
@@ -401,13 +402,15 @@ class PatchTSTTrainer(BaseModel):
     def _ensure_torch(self):
         if not TORCH_OK: raise RuntimeError(f"PyTorch not available: {_TORCH_ERR}")
     def train(self, X_train: np.ndarray, y_train: np.ndarray, series_ids: np.ndarray, label_dates: np.ndarray, cfg: TrainConfig,
-              preprocessors: Optional[List[Any]] = None) -> None:
+              preprocessors: Optional[List[Any]] = None, trial: Optional[optuna.Trial] = None) -> None:
         """Train PatchTST models under various validation policies.
 
         Parameters
         ----------
         preprocessors : Optional[List[Any]]
             Optional list of fold-specific preprocessors or artifacts.
+        trial : Optional[optuna.Trial]
+            Optuna trial for reporting intermediate values and pruning.
         """
         self.preprocessors = preprocessors
         if preprocessors:
@@ -673,6 +676,10 @@ class PatchTSTTrainer(BaseModel):
                 print(
                     f"Fold {i} Epoch {ep}: wSMAPE={w_val:.4f} SMAPE={s_val:.4f} MAE={mae_val:.4f}"
                 )
+                if trial is not None:
+                    trial.report(w_val, step=ep)
+                    if trial.should_prune():
+                        raise optuna.TrialPruned()
                 if bad >= self.params.patience:
                     break
             if best_state is not None:
