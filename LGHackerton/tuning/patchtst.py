@@ -360,11 +360,13 @@ class PatchTSTTuner(HyperparameterTuner):
                     priority_weight=getattr(self.cfg, "priority_weight", 1.0),
                 )
                 return float(score)
+            except optuna.TrialPruned:
+                raise
             except Exception as e:  # pragma: no cover - robustness
+                logging.exception("PatchTST trial %s failed", trial.number)
                 trial.set_user_attr("status", "failed")
                 trial.set_user_attr("fail_reason", repr(e))
-                logging.exception("PatchTST trial %s failed", trial.number)
-                raise optuna.TrialPruned(str(e)) from e
+                raise
             finally:
                 if callback_registered:
                     try:
