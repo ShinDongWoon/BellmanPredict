@@ -18,7 +18,7 @@ except Exception as _e:
 from LGHackerton.models.base_trainer import BaseModel, TrainConfig
 from LGHackerton.utils.metrics import smape, weighted_smape_np, PRIORITY_OUTLETS
 from LGHackerton.preprocess import Preprocessor, L as DEFAULT_L, H as DEFAULT_H
-from .train import build_loss, combine_predictions
+from .train import trunc_nb_nll, focal_loss, WeightedSMAPELoss, combine_predictions
 
 @dataclass
 class PatchTSTParams:
@@ -275,10 +275,8 @@ if TORCH_OK:
             z = self.norm(z).mean(1)
             params = self.reg_head(z)
             mu_raw, kappa_raw = params.chunk(2, dim=-1)
-            mu = F.softplus(mu_raw) + 1e-6
-            kappa = F.softplus(kappa_raw) + 1e-6
             p_clf = self.clf_head(z)
-            return p_clf, mu, kappa
+            return p_clf, mu_raw, kappa_raw
 
 class PatchTSTTrainer(BaseModel):
     """Trainer for PatchTST models.
@@ -534,25 +532,31 @@ class PatchTSTTrainer(BaseModel):
                 self.params.input_dim,
             ).to(self.device)
             opt = torch.optim.AdamW(net.parameters(), lr=self.params.lr, weight_decay=self.params.weight_decay)
-            loss_fn = build_loss(self.params.loss, alpha=self.params.loss_alpha)
-            bce_fn = nn.BCELoss(reduction="none")
+            smape_loss = WeightedSMAPELoss(reduction="mean")
             best=float("inf"); best_state=None; bad=0
             for ep in range(self.params.max_epochs):
                 net.train()
-                for xb, yb, sb, mu, std in tr_loader:
+                nb_sum = clf_sum = s_sum = 0.0
+                batch_count = 0
+                for xb, yb, sb, mu_s, std_s in tr_loader:
                     xb = xb.to(self.device, non_blocking=pin)
                     yb = yb.to(self.device, non_blocking=pin)
                     sb = sb.to(self.device, non_blocking=pin)
-                    mu = mu.to(self.device, non_blocking=pin)
-                    std = std.to(self.device, non_blocking=pin)
+                    mu_s = mu_s.to(self.device, non_blocking=pin)
+                    std_s = std_s.to(self.device, non_blocking=pin)
                     opt.zero_grad()
-                    p_clf, mu_pred, _ = net(xb, sb)
+                    p, mu_raw, kappa_raw = net(xb, sb)
+                    mu = F.softplus(mu_raw) + 1e-6
+                    kappa = F.softplus(kappa_raw) + 1e-6
                     y_raw = yb
+                    mu_unscaled = mu
                     if self.params.scaler == "revin":
-                        y_raw = y_raw * std.unsqueeze(1) + mu.unsqueeze(1)
-                    y_bin = (y_raw > 0).float()
+                        y_raw = y_raw * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
+                        mu_unscaled = mu * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
+                    M = (y_raw > 0)
+                    z = M.float()
                     series_w = self.series_weight_tensor[sb]
-                    w = torch.where(y_raw > 0, series_w.unsqueeze(1), torch.ones_like(yb))
+                    w = torch.where(M, series_w.unsqueeze(1), torch.ones_like(y_raw))
                     if cfg.use_weighted_loss:
                         outlets = [self.idx2id[int(i)].split("::")[0] for i in sb.cpu().tolist()]
                         priority_w = torch.tensor(
@@ -560,31 +564,48 @@ class PatchTSTTrainer(BaseModel):
                             device=self.device,
                         ).view(-1, 1)
                         w = w * priority_w
-                    try:
-                        reg_loss = loss_fn(mu_pred, yb, w)
-                    except TypeError:  # fallback for loss functions without weight support
-                        reg_loss = (loss_fn(mu_pred, yb) * w).mean()
-                    clf_loss = (bce_fn(p_clf, y_bin) * w).mean()
-                    loss = reg_loss + clf_loss
+                    nb_loss = trunc_nb_nll(y_raw, mu_unscaled, kappa)
+                    L_nb = (nb_loss * w * z).sum() / torch.clamp(z.sum(), min=1.0)
+                    L_clf = focal_loss(p, z, self.params.gamma, self.params.alpha, w)
+                    P0 = torch.pow(kappa / (kappa + mu_unscaled), kappa)
+                    cond_mean = mu_unscaled / torch.clamp(1.0 - P0, min=1e-6)
+                    y_hat = ((1 - self.params.epsilon_leaky) * p + self.params.epsilon_leaky) * cond_mean
+                    L_s = smape_loss(y_hat, y_raw, w)
+                    loss = (
+                        self.params.lambda_nb * L_nb
+                        + self.params.lambda_clf * L_clf
+                        + self.params.lambda_s * L_s
+                    )
                     loss.backward()
                     opt.step()
+                    nb_sum += float(L_nb.item())
+                    clf_sum += float(L_clf.item())
+                    s_sum += float(L_s.item())
+                    batch_count += 1
+                print(
+                    f"Fold {i} Epoch {ep} Train: L_nb={nb_sum/batch_count:.4f} "
+                    f"L_clf={clf_sum/batch_count:.4f} L_s={s_sum/batch_count:.4f}"
+                )
                 net.eval()
                 P = []
                 T = []
                 S = []
                 with torch.no_grad():
-                    for xb, yb, sb, mu, std in va_loader:
+                    for xb, yb, sb, mu_s, std_s in va_loader:
                         xb = xb.to(self.device, non_blocking=pin)
                         yb = yb.to(self.device, non_blocking=pin)
                         sb = sb.to(self.device, non_blocking=pin)
-                        mu = mu.to(self.device, non_blocking=pin)
-                        std = std.to(self.device, non_blocking=pin)
-                        prob, out, kappa = net(xb, sb)
+                        mu_s = mu_s.to(self.device, non_blocking=pin)
+                        std_s = std_s.to(self.device, non_blocking=pin)
+                        p, mu_raw, kappa_raw = net(xb, sb)
+                        mu = F.softplus(mu_raw) + 1e-6
+                        kappa = F.softplus(kappa_raw) + 1e-6
+                        mu_unscaled = mu
                         if self.params.scaler == "revin":
-                            out = out * std.unsqueeze(1) + mu.unsqueeze(1)
-                            yb = yb * std.unsqueeze(1) + mu.unsqueeze(1)
+                            mu_unscaled = mu * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
+                            yb = yb * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
                         final = combine_predictions(
-                            prob, out, kappa, self.params.epsilon_leaky
+                            p, mu_unscaled, kappa, self.params.epsilon_leaky
                         )
                         P.append(final.cpu().numpy())
                         T.append(yb.cpu().numpy())
@@ -622,17 +643,21 @@ class PatchTSTTrainer(BaseModel):
             Y = []
             S = []
             with torch.no_grad():
-                for xb, yb, sb, mu, std in va_loader:
+                for xb, yb, sb, mu_s, std_s in va_loader:
                     xb = xb.to(self.device, non_blocking=pin)
+                    yb = yb.to(self.device, non_blocking=pin)
                     sb = sb.to(self.device, non_blocking=pin)
-                    mu = mu.to(self.device, non_blocking=pin)
-                    std = std.to(self.device, non_blocking=pin)
-                    prob, out, kappa = net(xb, sb)
+                    mu_s = mu_s.to(self.device, non_blocking=pin)
+                    std_s = std_s.to(self.device, non_blocking=pin)
+                    p, mu_raw, kappa_raw = net(xb, sb)
+                    mu = F.softplus(mu_raw) + 1e-6
+                    kappa = F.softplus(kappa_raw) + 1e-6
+                    mu_unscaled = mu
                     if self.params.scaler == "revin":
-                        out = out * std.unsqueeze(1) + mu.unsqueeze(1)
-                        yb = yb * std.unsqueeze(1) + mu.unsqueeze(1)
+                        mu_unscaled = mu * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
+                        yb = yb * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
                     final = combine_predictions(
-                        prob, out, kappa, self.params.epsilon_leaky
+                        p, mu_unscaled, kappa, self.params.epsilon_leaky
                     )
                     final = final.cpu()
                     P.append(final.numpy())
@@ -671,18 +696,21 @@ class PatchTSTTrainer(BaseModel):
         )
         outs = []
         with torch.no_grad():
-            for xb, _, sb, mu, std in loader:
+            for xb, _, sb, mu_s, std_s in loader:
                 xb = xb.to(self.device, non_blocking=pin)
                 sb = sb.to(self.device, non_blocking=pin)
-                mu = mu.to(self.device, non_blocking=pin)
-                std = std.to(self.device, non_blocking=pin)
+                mu_s = mu_s.to(self.device, non_blocking=pin)
+                std_s = std_s.to(self.device, non_blocking=pin)
                 preds = [m(xb, sb) for m in self.models]
                 y_preds = []
-                for prob, mu_pred, kappa_pred in preds:
+                for p, mu_raw, kappa_raw in preds:
+                    mu = F.softplus(mu_raw) + 1e-6
+                    kappa = F.softplus(kappa_raw) + 1e-6
+                    mu_unscaled = mu
                     if self.params.scaler == "revin":
-                        mu_pred = mu_pred * std.unsqueeze(1) + mu.unsqueeze(1)
+                        mu_unscaled = mu * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
                     y_pred = combine_predictions(
-                        prob, mu_pred, kappa_pred, self.params.epsilon_leaky
+                        p, mu_unscaled, kappa, self.params.epsilon_leaky
                     )
                     y_preds.append(y_pred)
                 out = torch.stack(y_preds).mean(0)
