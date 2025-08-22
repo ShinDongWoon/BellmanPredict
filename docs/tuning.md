@@ -47,17 +47,17 @@ The following tables list the default ranges or choices used during tuning.
 
 | Parameter | Range/Choices |
 |-----------|---------------|
-| `d_model` | 64, 128, 256 |
-| `n_heads` | 4, 8 |
+| `d_model` | 128, 256, 384, 512 |
+| `n_heads` | 8, 16 |
 | `depth` | 2–6 |
-| `patch_len`/`stride` | 8, 12, 14, 16, 24 |
-| `dropout` | 0.0–0.5 |
-| `lr` | 1e-4–1e-2 (log) |
-| `weight_decay` | 1e-6–1e-3 (log) |
-| `id_embed_dim` | 0, 16 |
-| `batch_size` | 64, 128, 256 |
-| `max_epochs` | 50–200 |
-| `patience` | 5–30 |
+| `patch_len`/`stride` | 8, 16, 24, 32 |
+| `dropout` | 0.10–0.30 |
+| `lr` | 1e-4–3e-3 (log) |
+| `weight_decay` | 1e-5–1e-3 (log) |
+| `id_embed_dim` | 16, 32, 64 |
+| `batch_size` | 64, 128 |
+| `max_epochs` | 80–150 |
+| `patience` | 15–30 |
 
 ### LightGBM
 
