@@ -130,7 +130,8 @@ class _SeriesDataset(Dataset):
         y: np.ndarray,
         series_ids: Optional[Iterable[int]] = None,
         scaler: str = "per_series",
-        dynamic_idx: Optional[Dict[str, int]] = None,
+        dyn_idx: Optional[Iterable[int]] = None,
+        static_idx: Optional[Iterable[int]] = None,
     ):
         X = X.astype(np.float32)
         if X.ndim == 2:  # (N,L) -> (N,L,1)
@@ -141,17 +142,24 @@ class _SeriesDataset(Dataset):
             series_ids = [0 for _ in range(len(X))]
         self.sids = np.array(list(series_ids), dtype=np.int64)
         self.scaler = scaler
-        self.dynamic_idx = dynamic_idx or {SALES_FILLED_COL: 0}
-        self.dynamic_pos = sorted(self.dynamic_idx.values())
-        self.base_pos = self.dynamic_idx.get(SALES_FILLED_COL, 0)
+        # handle dynamic/static channel indices
+        if isinstance(dyn_idx, dict):
+            dyn_idx = dyn_idx.values()
+        if isinstance(static_idx, dict):
+            static_idx = static_idx.values()
+        self.dyn_idx = sorted(dyn_idx) if dyn_idx is not None else [0]
+        self.static_idx = sorted(static_idx) if static_idx is not None else []
 
-        # Pre-compute mean and std for base channel
-        base = self.X[:, :, self.base_pos]
-        mu = base.mean(axis=1)
-        std = base.std(axis=1)
+        # Pre-compute mean and std for each dynamic channel
+        dyn = self.X[:, :, self.dyn_idx]
+        mu = dyn.mean(axis=1)
+        std = dyn.std(axis=1)
         std[std == 0] = 1.0
         self.mu = mu.astype(np.float32)
         self.std = std.astype(np.float32)
+        # base channel statistics (first dynamic channel)
+        self.mu_base = self.mu[:, 0]
+        self.std_base = self.std[:, 0]
 
     def __len__(self):
         return self.X.shape[0]
@@ -160,12 +168,12 @@ class _SeriesDataset(Dataset):
         x = self.X[idx].copy()
         mu = np.float32(self.mu[idx])
         std = np.float32(self.std[idx])
-        # normalise dynamic channels (including base)
-        x[:, self.dynamic_pos] = (x[:, self.dynamic_pos] - mu) / std
+        # normalise dynamic channels only
+        x[:, self.dyn_idx] = (x[:, self.dyn_idx] - mu) / std
         y = self.y[idx]
         if self.scaler == "revin":
-            y = (y - mu) / std
-        return x, y, int(self.sids[idx]), mu, std
+            y = (y - self.mu_base[idx]) / self.std_base[idx]
+        return x, y, int(self.sids[idx]), np.float32(self.mu_base[idx]), np.float32(self.std_base[idx])
 
 
 def _make_rocv_slices(
@@ -511,11 +519,15 @@ class PatchTSTTrainer(BaseModel):
         for i, (tr_mask, va_mask) in enumerate(folds):
             tr_ds = _SeriesDataset(
                 X_train[tr_mask], y_train[tr_mask], series_idx[tr_mask],
-                scaler=self.params.scaler, dynamic_idx=self.dynamic_idx_map
+                scaler=self.params.scaler,
+                dyn_idx=self.dynamic_idx_map,
+                static_idx=self.static_idx_map,
             )
             va_ds = _SeriesDataset(
                 X_train[va_mask], y_train[va_mask], series_idx[va_mask],
-                scaler=self.params.scaler, dynamic_idx=self.dynamic_idx_map
+                scaler=self.params.scaler,
+                dyn_idx=self.dynamic_idx_map,
+                static_idx=self.static_idx_map,
             )
             pin = self.device != "cpu"
             tr_loader = DataLoader(
@@ -702,7 +714,8 @@ class PatchTSTTrainer(BaseModel):
             np.zeros((X_eval.shape[0], self.H), dtype=np.float32),
             series_idx,
             scaler=self.params.scaler,
-            dynamic_idx=self.dynamic_idx_map,
+            dyn_idx=self.dynamic_idx_map,
+            static_idx=self.static_idx_map,
         )
         pin = self.device != "cpu"
         loader = torch.utils.data.DataLoader(
