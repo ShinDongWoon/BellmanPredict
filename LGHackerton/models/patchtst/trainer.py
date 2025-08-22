@@ -8,6 +8,7 @@ from typing import Tuple, Iterable, Optional, List, Any, Dict, Callable
 try:
     import torch
     import torch.nn as nn
+    import torch.nn.functional as F
     from torch.utils.data import Dataset, DataLoader
     TORCH_OK = True
 except Exception as _e:
@@ -235,7 +236,7 @@ if TORCH_OK:
             self.norm = nn.LayerNorm(d_model)
             # separate heads for classification and regression
             self.reg_head = nn.Sequential(
-                nn.Linear(d_model, d_model), nn.GELU(), nn.Linear(d_model, H)
+                nn.Linear(d_model, d_model), nn.GELU(), nn.Linear(d_model, 2 * H)
             )
             self.clf_head = nn.Sequential(
                 nn.Linear(d_model, d_model), nn.GELU(), nn.Linear(d_model, H), nn.Sigmoid()
@@ -260,9 +261,12 @@ if TORCH_OK:
             for blk in self.blocks:
                 z = blk(z)
             z = self.norm(z).mean(1)
-            reg = self.reg_head(z)
-            clf = self.clf_head(z)
-            return clf, reg
+            params = self.reg_head(z)
+            mu_raw, kappa_raw = params.chunk(2, dim=-1)
+            mu = F.softplus(mu_raw) + 1e-6
+            kappa = F.softplus(kappa_raw) + 1e-6
+            p_clf = self.clf_head(z)
+            return p_clf, mu, kappa
 
 class PatchTSTTrainer(BaseModel):
     """Trainer for PatchTST models.
@@ -530,7 +534,7 @@ class PatchTSTTrainer(BaseModel):
                     mu = mu.to(self.device, non_blocking=pin)
                     std = std.to(self.device, non_blocking=pin)
                     opt.zero_grad()
-                    clf_pred, reg_pred = net(xb, sb)
+                    p_clf, mu_pred, _ = net(xb, sb)
                     y_raw = yb
                     if self.params.scaler == "revin":
                         y_raw = y_raw * std.unsqueeze(1) + mu.unsqueeze(1)
@@ -545,10 +549,10 @@ class PatchTSTTrainer(BaseModel):
                         ).view(-1, 1)
                         w = w * priority_w
                     try:
-                        reg_loss = loss_fn(reg_pred, yb, w)
+                        reg_loss = loss_fn(mu_pred, yb, w)
                     except TypeError:  # fallback for loss functions without weight support
-                        reg_loss = (loss_fn(reg_pred, yb) * w).mean()
-                    clf_loss = (bce_fn(clf_pred, y_bin) * w).mean()
+                        reg_loss = (loss_fn(mu_pred, yb) * w).mean()
+                    clf_loss = (bce_fn(p_clf, y_bin) * w).mean()
                     loss = reg_loss + clf_loss
                     loss.backward()
                     opt.step()
@@ -563,12 +567,12 @@ class PatchTSTTrainer(BaseModel):
                         sb = sb.to(self.device, non_blocking=pin)
                         mu = mu.to(self.device, non_blocking=pin)
                         std = std.to(self.device, non_blocking=pin)
-                        prob, out = net(xb, sb)
+                        prob, out, kappa = net(xb, sb)
                         if self.params.scaler == "revin":
                             out = out * std.unsqueeze(1) + mu.unsqueeze(1)
                             yb = yb * std.unsqueeze(1) + mu.unsqueeze(1)
                         final = combine_predictions(
-                            prob, out, self.params.kappa, self.params.epsilon_leaky
+                            prob, out, kappa, self.params.epsilon_leaky
                         )
                         P.append(final.cpu().numpy())
                         T.append(yb.cpu().numpy())
@@ -611,12 +615,12 @@ class PatchTSTTrainer(BaseModel):
                     sb = sb.to(self.device, non_blocking=pin)
                     mu = mu.to(self.device, non_blocking=pin)
                     std = std.to(self.device, non_blocking=pin)
-                    prob, out = net(xb, sb)
+                    prob, out, kappa = net(xb, sb)
                     if self.params.scaler == "revin":
                         out = out * std.unsqueeze(1) + mu.unsqueeze(1)
                         yb = yb * std.unsqueeze(1) + mu.unsqueeze(1)
                     final = combine_predictions(
-                        prob, out, self.params.kappa, self.params.epsilon_leaky
+                        prob, out, kappa, self.params.epsilon_leaky
                     )
                     final = final.cpu()
                     P.append(final.numpy())
@@ -662,11 +666,11 @@ class PatchTSTTrainer(BaseModel):
                 std = std.to(self.device, non_blocking=pin)
                 preds = [m(xb, sb) for m in self.models]
                 y_preds = []
-                for prob, reg in preds:
+                for prob, mu_pred, kappa_pred in preds:
                     if self.params.scaler == "revin":
-                        reg = reg * std.unsqueeze(1) + mu.unsqueeze(1)
+                        mu_pred = mu_pred * std.unsqueeze(1) + mu.unsqueeze(1)
                     y_pred = combine_predictions(
-                        prob, reg, self.params.kappa, self.params.epsilon_leaky
+                        prob, mu_pred, kappa_pred, self.params.epsilon_leaky
                     )
                     y_preds.append(y_pred)
                 out = torch.stack(y_preds).mean(0)
