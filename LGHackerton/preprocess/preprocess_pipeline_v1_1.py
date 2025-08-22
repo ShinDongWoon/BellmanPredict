@@ -714,7 +714,12 @@ class SampleWindowizer:
             self.guard.assert_scope({"train"})
         d = df.sort_values([SERIES_COL, DATE_COL]).copy()
 
+        if SALES_FILLED_COL not in d.columns:
+            raise ValueError(f"missing required column: {SALES_FILLED_COL}")
+
         dynamic_cols = [SALES_FILLED_COL] + [f for f in feature_cols if f not in static_cols]
+        if not dynamic_cols:
+            raise ValueError("no dynamic features: ensure 'sales_filled' exists")
         self.dynamic_idx = {c: i for i, c in enumerate(dynamic_cols)}
         self.static_idx = {c: len(dynamic_cols) + i for i, c in enumerate(static_cols)}
 
@@ -762,7 +767,12 @@ class SampleWindowizer:
             self.guard.assert_scope({"eval"})
         d = df_eval.sort_values([SERIES_COL, DATE_COL]).copy()
 
+        if SALES_FILLED_COL not in d.columns:
+            raise ValueError(f"missing required column: {SALES_FILLED_COL}")
+
         dynamic_cols = [SALES_FILLED_COL] + [f for f in feature_cols if f not in static_cols]
+        if not dynamic_cols:
+            raise ValueError("no dynamic features: ensure 'sales_filled' exists")
         self.dynamic_idx = {c: i for i, c in enumerate(dynamic_cols)}
         self.static_idx = {c: len(dynamic_cols) + i for i, c in enumerate(static_cols)}
 
