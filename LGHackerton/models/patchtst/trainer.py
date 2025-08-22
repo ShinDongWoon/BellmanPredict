@@ -148,10 +148,10 @@ class _SeriesDataset(Dataset):
             dyn_idx = dyn_idx.values()
         if isinstance(static_idx, dict):
             static_idx = static_idx.values()
-        self.dyn_idx = sorted(dyn_idx) if dyn_idx is not None else [0]
+        if dyn_idx is None or len(dyn_idx) == 0:
+            raise ValueError("dynamic channel indices required")
+        self.dyn_idx = sorted(dyn_idx)
         self.static_idx = sorted(static_idx) if static_idx is not None else []
-        if not self.dyn_idx:
-            raise ValueError("at least one dynamic channel required")
 
         # Pre-compute mean and std for each dynamic channel
         dyn = self.X[:, :, self.dyn_idx]
