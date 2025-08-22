@@ -150,6 +150,8 @@ class _SeriesDataset(Dataset):
             static_idx = static_idx.values()
         self.dyn_idx = sorted(dyn_idx) if dyn_idx is not None else [0]
         self.static_idx = sorted(static_idx) if static_idx is not None else []
+        if not self.dyn_idx:
+            raise ValueError("at least one dynamic channel required")
 
         # Pre-compute mean and std for each dynamic channel
         dyn = self.X[:, :, self.dyn_idx]
