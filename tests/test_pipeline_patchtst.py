@@ -42,7 +42,7 @@ def test_pipeline_patchtst(tmp_path):
         "\n"
         "PatchTSTTrainer.load=lambda self, path: None\n"
         "\n"
-        "def _predict(self, X, sid_idx):\n"
+        "def _predict(self, X, sid_idx, dyn_idx=None, static_idx=None):\n"
         "    k = 1.0\n"
         "    eps = self.params.epsilon_leaky\n"
         "    import numpy as np\n"
