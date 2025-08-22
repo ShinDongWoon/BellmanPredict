@@ -836,6 +836,8 @@ class Preprocessor:
             "woy_sin",
             "woy_cos",
             "is_promo",
+            "zero_ratio_28",
+            "days_since_last_sale",
         }
         self.patch_feature_cols = [
             c
