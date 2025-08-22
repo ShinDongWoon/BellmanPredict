@@ -166,6 +166,9 @@ def run_training(ctx: PipelineContext) -> None:
     except NotImplementedError as e:
         raise RuntimeError(f"{ctx.model_name} build_dataset not implemented") from e
     if ctx.model_name == "patchtst":
+        input_dim = X_train.shape[2] if X_train.ndim == 3 else 1
+        kind = "multivariate" if input_dim > 1 else "univariate"
+        logging.info("PatchTST training with %s input (%d features)", kind, input_dim)
         module = importlib.import_module(trainer_cls.__module__)
         if not getattr(module, "TORCH_OK", True):
             raise RuntimeError("PyTorch is not available")
@@ -213,6 +216,7 @@ def run_oof_prediction(ctx: PipelineContext) -> None:
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
     parser = argparse.ArgumentParser()
     parser.add_argument("--progress", dest="show_progress", action="store_true", help="show preprocessing progress")
     parser.add_argument("--no-progress", dest="show_progress", action="store_false", help="hide preprocessing progress")
