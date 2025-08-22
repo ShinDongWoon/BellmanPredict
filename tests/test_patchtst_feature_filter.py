@@ -64,3 +64,26 @@ def test_patchtst_dynamic_channels_drop_lag_roll():
         not k.startswith("lag_") and not k.startswith("roll_")
         for k in pp.patch_dynamic_idx
     )
+
+
+def test_patchtst_intermittency_features():
+    pp = Preprocessor()
+    pp.guard.set_scope("train")
+
+    # Feature columns including intermittency indicators
+    pp.feature_cols = [
+        "zero_ratio_28",
+        "days_since_last_sale",
+        "zero_run_len",
+        "dow",
+    ]
+    pp.static_feature_cols = []
+    pp.dynamic_feature_cols = [c for c in pp.feature_cols]
+
+    # Compute PatchTST feature lists
+    pp._compute_patch_features()
+
+    # Only zero_run_len should remain among intermittency features
+    assert "zero_run_len" in pp.patch_feature_cols
+    assert "zero_ratio_28" not in pp.patch_feature_cols
+    assert "days_since_last_sale" not in pp.patch_feature_cols
