@@ -99,7 +99,7 @@ class PatchTSTParams:
     stride: int = 1
     dropout: float = 0.1
     id_embed_dim: int = 16
-    enable_covariates: bool = False
+    enable_covariates: bool = True
     input_dim: int = 1
     lr: float = 1e-3
     weight_decay: float = 1e-4
