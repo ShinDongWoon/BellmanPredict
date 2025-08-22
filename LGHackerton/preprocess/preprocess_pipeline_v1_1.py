@@ -820,10 +820,28 @@ class Preprocessor:
         # Feature column subsets for PatchTST
         self.static_feature_cols: List[str] = []
         self.dynamic_feature_cols: List[str] = []
+        # PatchTST-specific filtered feature columns
+        self.patch_feature_cols: List[str] = []
+        self.patch_static_feature_cols: List[str] = []
         # Channel index maps produced by the windowizer
         self.patch_dynamic_idx: Dict[str, int] = {}
         self.patch_static_idx: Dict[str, int] = {}
         self.show_progress = show_progress
+
+    def _compute_patch_features(self, df: Optional[pd.DataFrame] = None):
+        drop = {
+            "is_priority_outlet",
+            "month_sin",
+            "month_cos",
+            "woy_sin",
+            "woy_cos",
+            "is_promo",
+        }
+        self.patch_feature_cols = [c for c in self.feature_cols if c not in drop]
+        self.patch_static_feature_cols = [
+            c for c in self.static_feature_cols if c in self.patch_feature_cols
+        ]
+        return df
 
     # --------------------------
     # Train
@@ -907,6 +925,7 @@ class Preprocessor:
             ("encoder", _encode),
             ("drop_low_var", _drop_low_var),
             ("feature_cols", _feature_cols),
+            ("patch_features", self._compute_patch_features),
         ]
 
         df = df_raw
@@ -963,7 +982,7 @@ class Preprocessor:
     def build_patch_train(self, df_full: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         self.guard.assert_scope({"train"})
         X, Y, sids, dates, dyn_idx, stat_idx = self.windowizer.build_patch_train(
-            df_full, self.feature_cols, self.static_feature_cols
+            df_full, self.patch_feature_cols, self.patch_static_feature_cols
         )
         self.patch_dynamic_idx = dyn_idx
         self.patch_static_idx = stat_idx
@@ -972,7 +991,7 @@ class Preprocessor:
     def build_patch_eval(self, df_eval_full: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         self.guard.assert_scope({"eval"})
         X, sids, dates, dyn_idx, stat_idx = self.windowizer.build_patch_eval(
-            df_eval_full, self.feature_cols, self.static_feature_cols
+            df_eval_full, self.patch_feature_cols, self.patch_static_feature_cols
         )
         self.patch_dynamic_idx = dyn_idx
         self.patch_static_idx = stat_idx
@@ -1013,6 +1032,7 @@ class Preprocessor:
         self.static_cols = art.static_cols
         self.static_feature_cols = art.static_feature_cols
         self.dynamic_feature_cols = art.dynamic_feature_cols
+        self._compute_patch_features()
         # re-wire
         self.cont_fix = DateContinuityFixer()
         self.strict_feats = StrictFeatureMaker()
