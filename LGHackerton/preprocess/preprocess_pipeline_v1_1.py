@@ -837,7 +837,11 @@ class Preprocessor:
             "woy_cos",
             "is_promo",
         }
-        self.patch_feature_cols = [c for c in self.feature_cols if c not in drop]
+        self.patch_feature_cols = [
+            c
+            for c in self.feature_cols
+            if c not in drop and not c.startswith("lag_") and not c.startswith("roll_")
+        ]
         self.patch_static_feature_cols = [
             c for c in self.static_feature_cols if c in self.patch_feature_cols
         ]
