@@ -301,6 +301,8 @@ class CalendarFeatureMaker:
                 "is_month_start",
                 "is_month_end",
                 "is_holiday",
+                "days_since_holiday",
+                "days_to_next_holiday",
                 "is_priority_outlet",
             ]
         )
@@ -343,10 +345,23 @@ class CalendarFeatureMaker:
             woy_dum = woy_dum.reindex(columns=self._woy_cols, fill_value=0)
             d = pd.concat([d.drop(columns=["month", "weekofyear"]), month_dum, woy_dum], axis=1)
 
-        if self._holiday_cache:
-            d["is_holiday"] = d[DATE_COL].dt.date.isin(self._holiday_cache).astype(np.int8)
-        else:
-            d["is_holiday"] = 0
+        d["is_holiday"] = d[DATE_COL].dt.date.isin(self._holiday_cache).astype(np.int8)
+
+        # days since/next holiday
+        d_sort = d.sort_values(DATE_COL)
+        holiday_dates = d_sort[DATE_COL].where(d_sort["is_holiday"].eq(1))
+        prev_hol = holiday_dates.ffill()
+        next_hol = holiday_dates.bfill()
+        d_sort["days_since_holiday"] = (d_sort[DATE_COL] - prev_hol).dt.days
+        d_sort["days_to_next_holiday"] = (next_hol - d_sort[DATE_COL]).dt.days
+        _max = np.int16(9999)
+        d_sort["days_since_holiday"] = (
+            d_sort["days_since_holiday"].fillna(_max).astype(np.int16)
+        )
+        d_sort["days_to_next_holiday"] = (
+            d_sort["days_to_next_holiday"].fillna(_max).astype(np.int16)
+        )
+        d = d_sort.sort_index()
 
         if self._promo_col is not None and self._promo_col in df.columns:
             d["is_promo"] = df[self._promo_col].astype(np.int8)
@@ -933,6 +948,10 @@ class Preprocessor:
         num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         cols = [c for c in num_cols if c not in exclude]
         # Safety: ensure deterministic ordering
+        cols = sorted(cols)
+        for c in ["days_since_holiday", "days_to_next_holiday"]:
+            if c in df.columns and c not in cols:
+                cols.append(c)
         cols = sorted(cols)
         return cols
 
