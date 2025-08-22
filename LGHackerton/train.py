@@ -178,7 +178,7 @@ def run_training(ctx: PipelineContext) -> None:
         if ctx.input_len is not None:
             trainer.L = ctx.input_len
         trainer.H = ctx.preprocessor.windowizer.H
-    trainer.train(X_train, y_train, series_ids, label_dates, ctx.cfg)
+    trainer.train(X_train, y_train, series_ids, label_dates, ctx.cfg, [ctx.preprocessor])
     ctx.oof_df = trainer.get_oof()
     model_path = ARTIFACTS_DIR / "models" / f"{ctx.model_name}.pt"
     if not model_path.exists():
