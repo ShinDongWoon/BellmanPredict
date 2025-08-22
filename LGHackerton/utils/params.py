@@ -5,7 +5,7 @@ from typing import Tuple
 
 import pandas as pd
 
-from LGHackerton.config.default import PATCH_PARAMS, ARTIFACTS_DIR, OPTUNA_DIR
+from LGHackerton.config.default import ARTIFACTS_DIR, OPTUNA_DIR, PATCH_PARAMS
 
 
 def _load_patchtst_params() -> Tuple[dict, int | None]:
@@ -56,11 +56,15 @@ def _load_patchtst_params() -> Tuple[dict, int | None]:
     try:
         with best_path.open("r", encoding="utf-8") as f:
             patch_best = json.load(f)
-        patch_best.setdefault("stride", patch_best.get("patch_len", PATCH_PARAMS["patch_len"]))
+        patch_best.setdefault(
+            "stride", patch_best.get("patch_len", PATCH_PARAMS["patch_len"])
+        )
         input_len = patch_best.pop("input_len", None)
         return {**PATCH_PARAMS, **patch_best}, input_len
     except Exception as e:  # pragma: no cover - best effort
-        logging.warning("Failed to load PatchTST params from %s: %s", best_path, e)
+        logging.warning(
+            "Failed to load PatchTST params from %s: %s", best_path, e
+        )
         return PATCH_PARAMS, None
 
 
@@ -72,6 +76,8 @@ def load_best_params(model_name: str) -> Tuple[dict, int | None]:
     }
     loader = loaders.get(model_name)
     if loader is None:
-        logging.info("No specialized loader for %s; using empty parameters", model_name)
+        logging.info(
+            "No specialized loader for %s; using empty parameters", model_name
+        )
         return {}, None
     return loader()
