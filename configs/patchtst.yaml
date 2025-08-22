@@ -6,5 +6,9 @@ rocv_val_span_days: 7
 purge_days: 28
 use_weighted_loss: true
 priority_weight: 3.0
-kappa: 1.0
-epsilon_leaky: 1.0e-8
+lambda_nb: 1.0
+lambda_clf: 1.0
+lambda_s: 0.05
+gamma: 2.0
+alpha: 0.25
+epsilon_leaky: 0.0

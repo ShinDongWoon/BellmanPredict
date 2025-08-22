@@ -60,8 +60,16 @@ class PatchTSTParams:
         Loss function to use during optimisation.
     loss_alpha : float
         Mixing factor when ``loss`` is ``"hybrid"``.
-    kappa : float
-        Scaling factor applied within the loss function.
+    lambda_nb : float
+        Weight for the negative binomial regression loss component.
+    lambda_clf : float
+        Weight for the classifier loss component.
+    lambda_s : float
+        Scaling applied to the sparsity regularisation term.
+    gamma : float
+        Gamma parameter for focal loss.
+    alpha : float
+        Alpha parameter for focal loss.
     epsilon_leaky : float
         Small constant added for numerical stability in leaky operations.
     scaler : str
@@ -102,8 +110,12 @@ class PatchTSTParams:
     patience: int = 20
     loss: str = "smape"
     loss_alpha: float = 0.5
-    kappa: float = 1.0
-    epsilon_leaky: float = 1e-8
+    lambda_nb: float = 1.0
+    lambda_clf: float = 1.0
+    lambda_s: float = 0.05
+    gamma: float = 2.0
+    alpha: float = 0.25
+    epsilon_leaky: float = 0.0
     scaler: str = "per_series"
     num_workers: int = 0
     # validation settings (mirrors TrainConfig)
