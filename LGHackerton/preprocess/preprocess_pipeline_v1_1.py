@@ -487,7 +487,10 @@ class StrictFeatureMaker:
                 res[i] = min(28 + 1, i - last)  # cap at 29
             return res
 
-        d["days_since_last_sale"] = gb[SALES_FILLED_COL].transform(lambda s: pd.Series(days_since_last_sale(s.values)))
+        # Use explicit index alignment to avoid misalignment-induced NaNs
+        d["days_since_last_sale"] = gb[SALES_FILLED_COL].transform(
+            lambda s: pd.Series(days_since_last_sale(s.values), index=s.index)
+        )
 
         # zero run length (current run)
         def zero_run_len(arr: np.ndarray) -> np.ndarray:
@@ -501,7 +504,9 @@ class StrictFeatureMaker:
                 out[i] = cnt
             return out
 
-        d["zero_run_len"] = gb[SALES_FILLED_COL].transform(lambda s: pd.Series(zero_run_len(s.values)))
+        d["zero_run_len"] = gb[SALES_FILLED_COL].transform(
+            lambda s: pd.Series(zero_run_len(s.values), index=s.index)
+        )
         vprint(f"[Strict] rolling+intermittency done  rows={len(d)}")
 
         return d
@@ -532,7 +537,11 @@ class RichLookupBuilder:
         g["series_base_raw"] = g["series_base_mean"]  # store raw mean for later centering
         g["series_cv"] = g["series_std"] / (g["series_base_raw"] + 1e-9)
         g["series_base_mean"] = np.log1p(g["series_base_raw"].clip(lower=1e-3))  # log1p + lower clip
-        g["series_cv"] = np.log1p(g["series_cv"].clip(upper=1e6))  # log1p + upper clip
+        # Coefficient of variation can be negative if the series mean is negative.
+        # ``np.log1p`` receives values clipped to ``[0, 1e6]`` to avoid
+        # ``RuntimeWarning: invalid value encountered in log1p`` and ensure the
+        # resulting feature is finite.
+        g["series_cv"] = np.log1p(g["series_cv"].clip(lower=0, upper=1e6))  # log1p + bounds
         self.base_table = g[[SERIES_COL, "series_base_raw", "series_base_mean", "series_cv"]].copy()
 
         # dow lookup: per (series_id, dow) mean if available
@@ -618,7 +627,11 @@ class SampleWindowizer:
 
         d = df.sort_values([SERIES_COL, DATE_COL]).copy()
         # Need at least lag_28 available to respect 28-day features
-        if "lag_27" not in d.columns:
+        if "lag_28" in d.columns:
+            lag_col = "lag_28"
+        elif "lag_27" in d.columns:
+            lag_col = "lag_27"
+        else:
             raise ValueError("Strict features required before building LGBM train set.")
 
         # Track categorical feature indices (e.g., for embeddings)
@@ -634,7 +647,8 @@ class SampleWindowizer:
                 d[c] = d[c].astype("float32")
 
         # --- Filter base rows once --------------------------------------------------------
-        base = d[d["lag_27"].notna()]
+        # Require full lookback history for all features
+        base = d[d[lag_col].notna()]
         base = base.dropna(
             subset=[f"y_{h}" for h in range(1, self.H + 1)], how="all"
         )
