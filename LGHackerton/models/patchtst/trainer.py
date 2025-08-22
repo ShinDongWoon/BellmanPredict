@@ -359,12 +359,23 @@ class PatchTSTTrainer(BaseModel):
             horizon = getattr(pp.windowizer, "H", DEFAULT_H)
             pp.windowizer.L = input_len
             pp.windowizer.H = horizon
-        return pp.build_patch_train(df_full)
+        X, Y, sids, dates = pp.build_patch_train(df_full)
+        # Guarantee channel index maps exist on the preprocessor
+        if not hasattr(pp, "patch_dynamic_idx"):
+            pp.patch_dynamic_idx = {}
+        if not hasattr(pp, "patch_static_idx"):
+            pp.patch_static_idx = {}
+        return X, Y, sids, dates
 
     @staticmethod
     def build_eval_dataset(pp: Preprocessor, df_full: pd.DataFrame):
         """Build evaluation dataset for prediction."""
-        return pp.build_patch_eval(df_full)
+        X, sids, dates = pp.build_patch_eval(df_full)
+        if not hasattr(pp, "patch_dynamic_idx"):
+            pp.patch_dynamic_idx = {}
+        if not hasattr(pp, "patch_static_idx"):
+            pp.patch_static_idx = {}
+        return X, sids, dates
 
     def __init__(
         self,
@@ -517,17 +528,20 @@ class PatchTSTTrainer(BaseModel):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.models = []
         for i, (tr_mask, va_mask) in enumerate(folds):
+            pp = preprocessors[i] if preprocessors and i < len(preprocessors) else None
+            dyn_idx = getattr(pp, "patch_dynamic_idx", self.dynamic_idx_map)
+            stat_idx = getattr(pp, "patch_static_idx", self.static_idx_map)
             tr_ds = _SeriesDataset(
                 X_train[tr_mask], y_train[tr_mask], series_idx[tr_mask],
                 scaler=self.params.scaler,
-                dyn_idx=self.dynamic_idx_map,
-                static_idx=self.static_idx_map,
+                dyn_idx=dyn_idx,
+                static_idx=stat_idx,
             )
             va_ds = _SeriesDataset(
                 X_train[va_mask], y_train[va_mask], series_idx[va_mask],
                 scaler=self.params.scaler,
-                dyn_idx=self.dynamic_idx_map,
-                static_idx=self.static_idx_map,
+                dyn_idx=dyn_idx,
+                static_idx=stat_idx,
             )
             pin = self.device != "cpu"
             tr_loader = DataLoader(
@@ -703,7 +717,13 @@ class PatchTSTTrainer(BaseModel):
             self.oof_records.extend(oof_df.to_dict("records"))
             self.models.append(net)
         self.save(os.path.join(self.model_dir,"patchtst.pt"))
-    def predict(self, X_eval: np.ndarray, series_idx: Optional[Iterable[int]] = None) -> np.ndarray:
+    def predict(
+        self,
+        X_eval: np.ndarray,
+        series_idx: Optional[Iterable[int]] = None,
+        dyn_idx: Optional[Iterable[int]] = None,
+        static_idx: Optional[Iterable[int]] = None,
+    ) -> np.ndarray:
         self._ensure_torch(); import torch
         if not self.models:
             raise RuntimeError("Model not loaded.")
@@ -714,8 +734,8 @@ class PatchTSTTrainer(BaseModel):
             np.zeros((X_eval.shape[0], self.H), dtype=np.float32),
             series_idx,
             scaler=self.params.scaler,
-            dyn_idx=self.dynamic_idx_map,
-            static_idx=self.static_idx_map,
+            dyn_idx=dyn_idx or self.dynamic_idx_map,
+            static_idx=static_idx or self.static_idx_map,
         )
         pin = self.device != "cpu"
         loader = torch.utils.data.DataLoader(
@@ -750,7 +770,12 @@ class PatchTSTTrainer(BaseModel):
         """Return conditional-mean prediction dataframe for PatchTST."""
         X_eval, sids, _ = eval_df
         sid_idx = np.array([self.id2idx.get(sid, 0) for sid in sids])
-        y_pred = self.predict(X_eval, sid_idx)
+        y_pred = self.predict(
+            X_eval,
+            sid_idx,
+            dyn_idx=self.dynamic_idx_map,
+            static_idx=self.static_idx_map,
+        )
         reps = np.repeat(sids, self.H)
         hs = np.tile(np.arange(1, self.H + 1), len(sids))
         out = pd.DataFrame({"series_id": reps, "h": hs, "yhat_patch": y_pred.reshape(-1)})
