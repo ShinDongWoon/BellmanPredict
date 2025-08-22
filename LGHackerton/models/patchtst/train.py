@@ -250,7 +250,7 @@ def weighted_smape_oof(
     y_true: Tensor,
     clf_prob: Tensor,
     reg_pred: Tensor,
-    kappa: float,
+    kappa: Tensor,
     epsilon_leaky: float,
     w: Optional[Tensor] = None,
 ) -> Tensor:
@@ -265,7 +265,7 @@ def weighted_smape_oof(
     reg_pred:
         Regression predictions representing ``mu_u``.
     kappa:
-        Shape parameter for the zero probability computation.
+        Per-sample shape parameters controlling the zero probability.
     epsilon_leaky:
         Small constant added to the classifier probability.
     w:
