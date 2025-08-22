@@ -143,10 +143,12 @@ def convert_to_submission(
     wide = wide.reindex(sample_df.iloc[:, 0]).reindex(
         columns=sample_df.columns[1:], fill_value=0.0
     )
+    wide = wide.astype(float)
 
     _missing_checks(pred_df)
 
     out_df = sample_df.copy()
+    out_df = out_df.astype({col: float for col in out_df.columns[1:]})
     out_df.iloc[:, 1:] = wide.to_numpy()
     assert list(out_df.columns) == list(sample_df.columns)
     return out_df
