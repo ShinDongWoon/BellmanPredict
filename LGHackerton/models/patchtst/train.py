@@ -119,43 +119,131 @@ def build_loss(name: str, alpha: float = 0.5, eps: float = 1e-8, reduction: str 
     raise ValueError(f"Unknown loss '{name}'")
 
 
+def trunc_nb_nll(y: Tensor, mu: Tensor, kappa: Tensor) -> Tensor:
+    r"""Zero-truncated negative binomial negative log-likelihood.
+
+    The probability mass function of the negative binomial distribution is
+
+    .. math::
+
+        \Pr(Y=y) = \frac{\Gamma(y+\kappa)}{\Gamma(\kappa)\,\Gamma(y+1)}
+        \Big(\frac{\kappa}{\kappa+\mu}\Big)^{\kappa}
+        \Big(\frac{\mu}{\kappa+\mu}\Big)^y
+
+    Conditioning on :math:`Y>0` yields the zero-truncated version used here.
+
+    Parameters
+    ----------
+    y, mu, kappa:
+        Observed counts, unconditional mean and shape parameters.  All tensors
+        must be broadcastable to a common shape.
+    """
+
+    y = y.to(mu.dtype)
+    kappa = torch.clamp(
+        torch.as_tensor(kappa, dtype=mu.dtype, device=mu.device), min=1e-8
+    )
+    mu = torch.clamp(mu, min=1e-8)
+
+    log_kappa = torch.log(kappa)
+    log_mu = torch.log(mu)
+    log_kappa_plus_mu = log_kappa + torch.log1p(mu / kappa)
+
+    log_pmf = (
+        torch.lgamma(y + kappa)
+        - torch.lgamma(kappa)
+        - torch.lgamma(y + 1.0)
+        + kappa * (log_kappa - log_kappa_plus_mu)
+        + y * (log_mu - log_kappa_plus_mu)
+    )
+
+    log_p0 = kappa * (log_kappa - log_kappa_plus_mu)
+    p0 = torch.exp(log_p0)
+    p0 = torch.clamp(p0, max=1.0 - 1e-6)
+    log1m_p0 = torch.log1p(-p0)
+
+    return -(log_pmf - log1m_p0)
+
+
+def focal_loss(
+    p: Tensor,
+    z: Tensor,
+    gamma: float,
+    alpha: float,
+    w: Optional[Tensor] = None,
+) -> Tensor:
+    r"""Binary focal loss for probability inputs.
+
+    Parameters
+    ----------
+    p:
+        Predicted probabilities for the positive class.
+    z:
+        Ground truth labels in ``{0, 1}``.
+    gamma:
+        Focusing parameter that reduces the relative loss for well-classified
+        examples.
+    alpha:
+        Balancing factor between positive and negative examples.
+    w:
+        Optional sample weights applied before taking the mean.
+    """
+
+    p = torch.clamp(p, min=1e-8, max=1 - 1e-8)
+    z = z.to(p.dtype)
+    log_p = torch.log(p)
+    log1m_p = torch.log1p(-p)
+
+    loss_pos = -alpha * torch.pow(1 - p, gamma) * z * log_p
+    loss_neg = -(1 - alpha) * torch.pow(p, gamma) * (1 - z) * log1m_p
+    loss = loss_pos + loss_neg
+
+    if w is not None:
+        loss = loss * w
+    return loss.mean()
+
+
 def combine_predictions(
-    clf_prob: Tensor, reg_pred: Tensor, kappa: float, epsilon_leaky: float
+    p: Tensor, mu: Tensor, kappa: Tensor, epsilon: Tensor
 ) -> Tensor:
     r"""Combine classifier probability with conditional mean adjustment.
 
-    The regression prediction ``reg_pred`` is interpreted as the unconditional
-    mean :math:`\mu_u`.  The conditional mean under zero truncation is
-    calculated using ``kappa`` and then scaled by the classifier probability
-    ``clf_prob`` with a small ``epsilon_leaky`` to avoid collapse::
+    The regression prediction ``mu`` is interpreted as the unconditional mean
+    :math:`\mu_u`. The conditional mean under zero truncation is calculated
+    using the per-sample ``kappa`` and then scaled by the classifier
+    probability ``p`` with a small ``epsilon`` to avoid collapse::
 
-        P0 = (kappa / (kappa + mu_u)) ** kappa
-        cond_mean = mu_u / max(1 - P0, 1e-6)
+        P0 = (kappa / (kappa + mu)) ** kappa
+        cond_mean = mu / max(1 - P0, 1e-6)
         y_hat = ((1 - eps) * p + eps) * cond_mean
 
     Parameters
     ----------
-    clf_prob:
+    p:
         Probability output of the zero/non-zero classifier where higher values
         indicate non-zero demand.
-    reg_pred:
+    mu:
         Regression model predictions corresponding to the unconditional mean
         ``mu_u``.
     kappa:
         Shape parameter controlling the zero probability ``P0``.
-    epsilon_leaky:
-        Small constant added to the classifier probability.
+    epsilon:
+        Small constant added to the classifier probability. May be per-sample.
 
     Returns
     -------
     Tensor
         Final demand prediction after conditional mean adjustment.
     """
-    k = torch.as_tensor(kappa, dtype=reg_pred.dtype, device=reg_pred.device)
-    eps = torch.as_tensor(epsilon_leaky, dtype=reg_pred.dtype, device=reg_pred.device)
-    p0 = torch.pow(k / (k + reg_pred), k)
-    cond_mean = reg_pred / torch.clamp(1.0 - p0, min=1e-6)
-    return ((1 - eps) * clf_prob + eps) * cond_mean
+    mu = mu.to(p.dtype)
+    kappa = torch.clamp(
+        torch.as_tensor(kappa, dtype=mu.dtype, device=mu.device), min=1e-8
+    )
+    epsilon = torch.as_tensor(epsilon, dtype=mu.dtype, device=mu.device)
+
+    p0 = torch.pow(kappa / (kappa + mu), kappa)
+    cond_mean = mu / torch.clamp(1.0 - p0, min=1e-6)
+    return ((1 - epsilon) * p + epsilon) * cond_mean
 
 
 def weighted_smape_oof(
