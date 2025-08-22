@@ -848,6 +848,7 @@ class Preprocessor:
             "is_promo",
             "zero_ratio_28",
             "days_since_last_sale",
+            "series_code",
         }
         self.patch_feature_cols = [
             c
