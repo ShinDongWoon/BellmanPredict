@@ -56,10 +56,6 @@ class PatchTSTParams:
         Maximum number of training epochs per fold.
     patience : int
         Early stopping patience measured in epochs.
-    loss : str
-        Loss function to use during optimisation.
-    loss_alpha : float
-        Mixing factor when ``loss`` is ``"hybrid"``.
     lambda_nb : float
         Weight for the negative binomial regression loss component.
     lambda_clf : float
@@ -108,8 +104,6 @@ class PatchTSTParams:
     batch_size: int = 256
     max_epochs: int = 200
     patience: int = 20
-    loss: str = "smape"
-    loss_alpha: float = 0.5
     lambda_nb: float = 1.0
     lambda_clf: float = 1.0
     lambda_s: float = 0.05
