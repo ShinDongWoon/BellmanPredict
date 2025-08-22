@@ -718,7 +718,8 @@ class SampleWindowizer:
             raise ValueError(f"missing required column: {SALES_FILLED_COL}")
 
         dynamic_cols = [SALES_FILLED_COL] + [f for f in feature_cols if f not in static_cols]
-        if not dynamic_cols:
+        dynamic_cols = [c for c in dict.fromkeys(dynamic_cols) if c]
+        if len(dynamic_cols) < 1:
             raise ValueError("no dynamic features: ensure 'sales_filled' exists")
         self.dynamic_idx = {c: i for i, c in enumerate(dynamic_cols)}
         self.static_idx = {c: len(dynamic_cols) + i for i, c in enumerate(static_cols)}
@@ -771,7 +772,8 @@ class SampleWindowizer:
             raise ValueError(f"missing required column: {SALES_FILLED_COL}")
 
         dynamic_cols = [SALES_FILLED_COL] + [f for f in feature_cols if f not in static_cols]
-        if not dynamic_cols:
+        dynamic_cols = [c for c in dict.fromkeys(dynamic_cols) if c]
+        if len(dynamic_cols) < 1:
             raise ValueError("no dynamic features: ensure 'sales_filled' exists")
         self.dynamic_idx = {c: i for i, c in enumerate(dynamic_cols)}
         self.static_idx = {c: len(dynamic_cols) + i for i, c in enumerate(static_cols)}
