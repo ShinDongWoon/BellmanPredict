@@ -59,4 +59,6 @@ TRAIN_CFG = dict(
     purge_days=28,
     min_val_samples=28,
     purge_mode="L",
+    n_trials=20,
+    timeout=None,
 )

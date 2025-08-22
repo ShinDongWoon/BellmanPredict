@@ -26,6 +26,8 @@ class TrainConfig:
     min_val_samples:int=28           # minimum validation samples per fold
     purge_mode:str="L"               # fallback for legacy behaviour
     input_lens: List[int] | None = None
+    n_trials:int=20
+    timeout:int|None=None
 
 class BaseModel(ABC):
     def __init__(self, model_params: Dict[str, Any], model_dir: str):
