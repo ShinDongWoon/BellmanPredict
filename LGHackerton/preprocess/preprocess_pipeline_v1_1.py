@@ -589,6 +589,9 @@ class SampleWindowizer:
         self.H = horizon
         self.guard = guard
         self.cat_indices: Dict[str, int] = {}
+        # Channel indices for PatchTST tensors
+        self.dynamic_idx: Dict[str, int] = {}
+        self.static_idx: Dict[str, int] = {}
 
     def build_lgbm_train(
             self, df: pd.DataFrame, feature_cols: List[str]
@@ -683,23 +686,37 @@ class SampleWindowizer:
         return out
 
     def build_patch_train(
-            self, df: pd.DataFrame
+            self,
+            df: pd.DataFrame,
+            feature_cols: List[str],
+            static_cols: List[str],
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Build PatchTST training windows with identifiers."""
         if self.guard:
             self.guard.assert_scope({"train"})
         d = df.sort_values([SERIES_COL, DATE_COL]).copy()
+
+        dynamic_cols = [SALES_FILLED_COL] + [f for f in feature_cols if f not in static_cols]
+        self.dynamic_idx = {c: i for i, c in enumerate(dynamic_cols)}
+        self.static_idx = {c: len(dynamic_cols) + i for i, c in enumerate(static_cols)}
+
         X_list, Y_list, S_list, D_list = [], [], [], []
         for sid, g in d.groupby(SERIES_COL, sort=False):
             g = g.reset_index(drop=True)
             # windows
             for t in range(self.L - 1, len(g) - self.H):
-                x_window = g.loc[t - self.L + 1: t, SALES_FILLED_COL].values.astype(float)
+                dyn_window = g.loc[t - self.L + 1: t, dynamic_cols].values.astype(float)
                 # Require label availability
                 y_vec = g.loc[t + 1: t + self.H, SALES_COL].values.astype(float)
                 if np.any(np.isnan(y_vec)):
                     continue
-                X_list.append(x_window.reshape(self.L, 1))
+                if static_cols:
+                    stat_vals = g.loc[t, static_cols].values.astype(float)
+                    stat_block = np.repeat(stat_vals.reshape(1, -1), self.L, axis=0)
+                    x_window = np.concatenate([dyn_window, stat_block], axis=1)
+                else:
+                    x_window = dyn_window
+                X_list.append(x_window)
                 Y_list.append(y_vec)
                 S_list.append(sid)
                 D_list.append(g.loc[t + self.H, DATE_COL])
@@ -718,19 +735,33 @@ class SampleWindowizer:
         return X_arr, Y_arr, sids, dates
 
     def build_patch_eval(
-            self, df_eval: pd.DataFrame
+            self,
+            df_eval: pd.DataFrame,
+            feature_cols: List[str],
+            static_cols: List[str],
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         if self.guard:
             self.guard.assert_scope({"eval"})
         d = df_eval.sort_values([SERIES_COL, DATE_COL]).copy()
+
+        dynamic_cols = [SALES_FILLED_COL] + [f for f in feature_cols if f not in static_cols]
+        self.dynamic_idx = {c: i for i, c in enumerate(dynamic_cols)}
+        self.static_idx = {c: len(dynamic_cols) + i for i, c in enumerate(static_cols)}
+
         X_list, S_list, D_list = [], [], []
         for sid, g in d.groupby(SERIES_COL, sort=False):
             g = g.reset_index(drop=True)
             if len(g) < self.L:
                 warn(f"Eval series {sid}: insufficient length {len(g)} for L={self.L}.")
                 continue
-            x_window = g.loc[len(g) - self.L: len(g) - 1, SALES_FILLED_COL].values.astype(float)
-            X_list.append(x_window.reshape(self.L, 1))
+            dyn_window = g.loc[len(g) - self.L: len(g) - 1, dynamic_cols].values.astype(float)
+            if static_cols:
+                stat_vals = g.loc[len(g) - 1, static_cols].values.astype(float)
+                stat_block = np.repeat(stat_vals.reshape(1, -1), self.L, axis=0)
+                x_window = np.concatenate([dyn_window, stat_block], axis=1)
+            else:
+                x_window = dyn_window
+            X_list.append(x_window)
             S_list.append(sid)
             D_list.append(g.loc[len(g) - 1, DATE_COL])
         if not X_list:
@@ -755,6 +786,7 @@ class PreprocessorArtifacts:
     leak_guard: LeakGuard
     feature_cols: List[str]
     low_var_cols: List[str]
+    static_cols: List[str]
 
 
 class Preprocessor:
@@ -774,6 +806,7 @@ class Preprocessor:
         self.windowizer = SampleWindowizer(guard=self.guard)
         self.feature_cols: List[str] = []
         self.low_var_cols: List[str] = []
+        self.static_cols: List[str] = []
         self.show_progress = show_progress
 
     # --------------------------
@@ -832,7 +865,13 @@ class Preprocessor:
         def _feature_cols(df: pd.DataFrame) -> pd.DataFrame:
             self.feature_cols = self._select_feature_columns(df)
             assert set(self.low_var_cols).isdisjoint(self.feature_cols)
-            vprint(f"[FIT] rich+encode: feature_cols={len(self.feature_cols)}  total_cols={len(df.columns)}")
+            gb = df.groupby(SERIES_COL)
+            self.static_cols = [
+                c for c in self.feature_cols if gb[c].nunique().le(1).all()
+            ]
+            vprint(
+                f"[FIT] rich+encode: feature_cols={len(self.feature_cols)}  total_cols={len(df.columns)}  static_cols={len(self.static_cols)}"
+            )
             return df
 
         steps = [
@@ -900,11 +939,15 @@ class Preprocessor:
 
     def build_patch_train(self, df_full: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         self.guard.assert_scope({"train"})
-        return self.windowizer.build_patch_train(df_full)
+        return self.windowizer.build_patch_train(
+            df_full, self.feature_cols, self.static_cols
+        )
 
     def build_patch_eval(self, df_eval_full: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         self.guard.assert_scope({"eval"})
-        return self.windowizer.build_patch_eval(df_eval_full)
+        return self.windowizer.build_patch_eval(
+            df_eval_full, self.feature_cols, self.static_cols
+        )
 
     # --------------------------
     # Artifacts I/O
@@ -920,6 +963,7 @@ class Preprocessor:
             leak_guard=self.guard,
             feature_cols=self.feature_cols,
             low_var_cols=self.low_var_cols,
+            static_cols=self.static_cols,
         )
         with open(path, "wb") as f:
             pickle.dump(artifacts, f)
@@ -935,6 +979,7 @@ class Preprocessor:
         self.guard = art.leak_guard
         self.feature_cols = art.feature_cols
         self.low_var_cols = art.low_var_cols
+        self.static_cols = art.static_cols
         # re-wire
         self.cont_fix = DateContinuityFixer()
         self.strict_feats = StrictFeatureMaker()
