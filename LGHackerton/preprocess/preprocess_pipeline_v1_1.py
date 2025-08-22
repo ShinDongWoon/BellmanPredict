@@ -875,6 +875,7 @@ class Preprocessor:
             "zero_ratio_28",
             "days_since_last_sale",
             "series_code",
+            "series_cv",
         }
         self.patch_feature_cols = [
             c
