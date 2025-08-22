@@ -252,7 +252,7 @@ class CalendarFeatureMaker:
     def __init__(
         self,
         holiday_provider: Optional[HolidayProvider] = None,
-        cyclical: bool = False,
+        cyclical: bool = True,
         keep_months: Optional[Iterable[int]] = None,
         keep_woys: Optional[Iterable[int]] = None,
     ):
@@ -269,15 +269,19 @@ class CalendarFeatureMaker:
     def fit(self, df: pd.DataFrame):
         years = df[DATE_COL].dt.year.unique().tolist()
         self._holiday_cache = self.holiday_provider.compute(years)
-        # store columns to align dummies at transform
-        weeks = df[DATE_COL].dt.isocalendar().week.unique().tolist()
-        months = df[DATE_COL].dt.month.unique().tolist()
-        if self.keep_woys is not None:
-            weeks = [w for w in weeks if w in self.keep_woys]
-        if self.keep_months is not None:
-            months = [m for m in months if m in self.keep_months]
-        self._woy_cols = [f"woy_{w}" for w in sorted(weeks)]
-        self._month_cols = [f"month_{m}" for m in sorted(months)]
+        # store columns to align dummies at transform (only for non-cyclical)
+        if not self.cyclical:
+            weeks = df[DATE_COL].dt.isocalendar().week.unique().tolist()
+            months = df[DATE_COL].dt.month.unique().tolist()
+            if self.keep_woys is not None:
+                weeks = [w for w in weeks if w in self.keep_woys]
+            if self.keep_months is not None:
+                months = [m for m in months if m in self.keep_months]
+            self._woy_cols = [f"woy_{w}" for w in sorted(weeks)]
+            self._month_cols = [f"month_{m}" for m in sorted(months)]
+        else:
+            self._woy_cols = []
+            self._month_cols = []
         promo_candidates = [
             c
             for c in ["is_promo", "promo", "promotion", "promotion_flag"]
@@ -324,15 +328,16 @@ class CalendarFeatureMaker:
         d["is_month_end"] = d[DATE_COL].dt.is_month_end.astype(np.int8)
 
         # base calendar categories
-        d["month"] = d[DATE_COL].dt.month
-        d["weekofyear"] = d[DATE_COL].dt.isocalendar().week.astype(int)
         if self.cyclical:
-            d["month_sin"] = np.sin(2 * np.pi * d["month"] / 12)
-            d["month_cos"] = np.cos(2 * np.pi * d["month"] / 12)
-            d["woy_sin"] = np.sin(2 * np.pi * d["weekofyear"] / 52)
-            d["woy_cos"] = np.cos(2 * np.pi * d["weekofyear"] / 52)
-            d = d.drop(columns=["month", "weekofyear"])
+            month = d[DATE_COL].dt.month
+            weekofyear = d[DATE_COL].dt.isocalendar().week.astype(int)
+            d["month_sin"] = np.sin(2 * np.pi * month / 12)
+            d["month_cos"] = np.cos(2 * np.pi * month / 12)
+            d["woy_sin"] = np.sin(2 * np.pi * weekofyear / 52)
+            d["woy_cos"] = np.cos(2 * np.pi * weekofyear / 52)
         else:
+            d["month"] = d[DATE_COL].dt.month
+            d["weekofyear"] = d[DATE_COL].dt.isocalendar().week.astype(int)
             month_dum = pd.get_dummies(d["month"], prefix="month", dtype=np.int8)
             month_dum = month_dum.reindex(columns=self._month_cols, fill_value=0)
             woy_dum = pd.get_dummies(d["weekofyear"], prefix="woy", dtype=np.int8)
@@ -732,7 +737,7 @@ class Preprocessor:
         self.guard = LeakGuard()
         self.schema = SchemaNormalizer()
         self.cont_fix = DateContinuityFixer()
-        self.calendar = CalendarFeatureMaker()
+        self.calendar = CalendarFeatureMaker(cyclical=True)
         self.missing_outlier = MissingAndOutlierHandler()
         self.strict_feats = StrictFeatureMaker()
         self.rich = RichLookupBuilder()
