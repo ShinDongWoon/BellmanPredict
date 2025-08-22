@@ -121,7 +121,17 @@ class PatchTSTTuner(HyperparameterTuner):
         self.model_name = "patchtst"
         self.artifact_dir = ARTIFACTS_DIR / self.model_name
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
-        self._dataset_cache: Dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = {}
+        self._dataset_cache: Dict[
+            int,
+            tuple[
+                np.ndarray,
+                np.ndarray,
+                np.ndarray,
+                np.ndarray,
+                Dict[str, int],
+                Dict[str, int],
+            ],
+        ] = {}
         self.best_input_len: int | None = None
 
     def validate_params(self, params: dict) -> None:  # type: ignore[override]
@@ -283,8 +293,20 @@ class PatchTSTTuner(HyperparameterTuner):
                 input_len = trial.suggest_categorical("input_len", input_lens)
                 if input_len not in self._dataset_cache:
                     self.pp.windowizer = SampleWindowizer(lookback=input_len, horizon=H)
-                    self._dataset_cache[input_len] = self.pp.build_patch_train(self.df)
-                X, y, series_ids, label_dates = self._dataset_cache[input_len]
+                    X, y, series_ids, label_dates = self.pp.build_patch_train(self.df)
+                    dyn_idx = getattr(self.pp, "patch_dynamic_idx", {}).copy()
+                    stat_idx = getattr(self.pp, "patch_static_idx", {}).copy()
+                    self._dataset_cache[input_len] = (
+                        X,
+                        y,
+                        series_ids,
+                        label_dates,
+                        dyn_idx,
+                        stat_idx,
+                    )
+                X, y, series_ids, label_dates, dyn_idx, stat_idx = self._dataset_cache[input_len]
+                self.pp.patch_dynamic_idx = dyn_idx
+                self.pp.patch_static_idx = stat_idx
                 reg_mode = trial.suggest_categorical("reg_mode", ["light", "strong"])
                 if reg_mode == "light":
                     dropout = trial.suggest_float("dropout", 0.40, 0.50)
@@ -328,7 +350,7 @@ class PatchTSTTuner(HyperparameterTuner):
                     device=device,
                 )
 
-                trainer.train(X, y, series_ids, label_dates, self.cfg)
+                trainer.train(X, y, series_ids, label_dates, self.cfg, [self.pp])
                 oof = trainer.get_oof()
                 outlets = oof["series_id"].str.split("::").str[0].values
                 score = weighted_smape_np(
