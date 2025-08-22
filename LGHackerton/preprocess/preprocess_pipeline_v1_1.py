@@ -690,8 +690,16 @@ class SampleWindowizer:
             df: pd.DataFrame,
             feature_cols: List[str],
             static_cols: List[str],
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Build PatchTST training windows with identifiers."""
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, int], Dict[str, int]]:
+        """Build PatchTST training windows with identifiers.
+
+        Returns
+        -------
+        Tuple
+            ``(X, y, series_ids, label_dates, dynamic_idx, static_idx)``
+            where ``dynamic_idx`` and ``static_idx`` map column names to
+            channel indices in ``X``.
+        """
         if self.guard:
             self.guard.assert_scope({"train"})
         d = df.sort_values([SERIES_COL, DATE_COL]).copy()
@@ -732,14 +740,14 @@ class SampleWindowizer:
         sids = sids[order]
         dates = dates[order]
 
-        return X_arr, Y_arr, sids, dates
+        return X_arr, Y_arr, sids, dates, self.dynamic_idx, self.static_idx
 
     def build_patch_eval(
             self,
             df_eval: pd.DataFrame,
             feature_cols: List[str],
             static_cols: List[str],
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, int], Dict[str, int]]:
         if self.guard:
             self.guard.assert_scope({"eval"})
         d = df_eval.sort_values([SERIES_COL, DATE_COL]).copy()
@@ -770,7 +778,7 @@ class SampleWindowizer:
 
         sids = np.array(S_list, dtype=object)
         dates = np.array(D_list, dtype="datetime64[ns]")
-        return np.stack(X_list, axis=0), sids, dates
+        return np.stack(X_list, axis=0), sids, dates, self.dynamic_idx, self.static_idx
 
 
 # ------------------------------
@@ -787,6 +795,8 @@ class PreprocessorArtifacts:
     feature_cols: List[str]
     low_var_cols: List[str]
     static_cols: List[str]
+    static_feature_cols: List[str]
+    dynamic_feature_cols: List[str]
 
 
 class Preprocessor:
@@ -807,6 +817,12 @@ class Preprocessor:
         self.feature_cols: List[str] = []
         self.low_var_cols: List[str] = []
         self.static_cols: List[str] = []
+        # Feature column subsets for PatchTST
+        self.static_feature_cols: List[str] = []
+        self.dynamic_feature_cols: List[str] = []
+        # Channel index maps produced by the windowizer
+        self.patch_dynamic_idx: Dict[str, int] = {}
+        self.patch_static_idx: Dict[str, int] = {}
         self.show_progress = show_progress
 
     # --------------------------
@@ -868,6 +884,13 @@ class Preprocessor:
             gb = df.groupby(SERIES_COL)
             self.static_cols = [
                 c for c in self.feature_cols if gb[c].nunique().le(1).all()
+            ]
+            # Track explicit static feature columns for PatchTST
+            self.static_feature_cols = [
+                c for c in ["shop_code", "menu_code"] if c in self.feature_cols
+            ]
+            self.dynamic_feature_cols = [
+                c for c in self.feature_cols if c not in self.static_feature_cols
             ]
             vprint(
                 f"[FIT] rich+encode: feature_cols={len(self.feature_cols)}  total_cols={len(df.columns)}  static_cols={len(self.static_cols)}"
@@ -939,15 +962,21 @@ class Preprocessor:
 
     def build_patch_train(self, df_full: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         self.guard.assert_scope({"train"})
-        return self.windowizer.build_patch_train(
-            df_full, self.feature_cols, self.static_cols
+        X, Y, sids, dates, dyn_idx, stat_idx = self.windowizer.build_patch_train(
+            df_full, self.feature_cols, self.static_feature_cols
         )
+        self.patch_dynamic_idx = dyn_idx
+        self.patch_static_idx = stat_idx
+        return X, Y, sids, dates
 
     def build_patch_eval(self, df_eval_full: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         self.guard.assert_scope({"eval"})
-        return self.windowizer.build_patch_eval(
-            df_eval_full, self.feature_cols, self.static_cols
+        X, sids, dates, dyn_idx, stat_idx = self.windowizer.build_patch_eval(
+            df_eval_full, self.feature_cols, self.static_feature_cols
         )
+        self.patch_dynamic_idx = dyn_idx
+        self.patch_static_idx = stat_idx
+        return X, sids, dates
 
     # --------------------------
     # Artifacts I/O
@@ -964,6 +993,8 @@ class Preprocessor:
             feature_cols=self.feature_cols,
             low_var_cols=self.low_var_cols,
             static_cols=self.static_cols,
+            static_feature_cols=self.static_feature_cols,
+            dynamic_feature_cols=self.dynamic_feature_cols,
         )
         with open(path, "wb") as f:
             pickle.dump(artifacts, f)
@@ -980,6 +1011,8 @@ class Preprocessor:
         self.feature_cols = art.feature_cols
         self.low_var_cols = art.low_var_cols
         self.static_cols = art.static_cols
+        self.static_feature_cols = art.static_feature_cols
+        self.dynamic_feature_cols = art.dynamic_feature_cols
         # re-wire
         self.cont_fix = DateContinuityFixer()
         self.strict_feats = StrictFeatureMaker()

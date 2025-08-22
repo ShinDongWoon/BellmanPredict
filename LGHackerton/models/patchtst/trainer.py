@@ -18,6 +18,7 @@ except Exception as _e:
 from LGHackerton.models.base_trainer import BaseModel, TrainConfig
 from LGHackerton.utils.metrics import smape, weighted_smape_np, PRIORITY_OUTLETS
 from LGHackerton.preprocess import Preprocessor, L as DEFAULT_L, H as DEFAULT_H
+from LGHackerton.preprocess.preprocess_pipeline_v1_1 import SALES_FILLED_COL
 from .train import trunc_nb_nll, focal_loss, WeightedSMAPELoss, combine_predictions
 
 @dataclass
@@ -123,7 +124,14 @@ class PatchTSTParams:
     min_val_samples: int = 28
 
 class _SeriesDataset(Dataset):
-    def __init__(self, X: np.ndarray, y: np.ndarray, series_ids: Optional[Iterable[int]] = None, scaler: str = "per_series"):
+    def __init__(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        series_ids: Optional[Iterable[int]] = None,
+        scaler: str = "per_series",
+        dynamic_idx: Optional[Dict[str, int]] = None,
+    ):
         X = X.astype(np.float32)
         if X.ndim == 2:  # (N,L) -> (N,L,1)
             X = X[..., None]
@@ -133,9 +141,12 @@ class _SeriesDataset(Dataset):
             series_ids = [0 for _ in range(len(X))]
         self.sids = np.array(list(series_ids), dtype=np.int64)
         self.scaler = scaler
+        self.dynamic_idx = dynamic_idx or {SALES_FILLED_COL: 0}
+        self.dynamic_pos = sorted(self.dynamic_idx.values())
+        self.base_pos = self.dynamic_idx.get(SALES_FILLED_COL, 0)
 
-        # Pre-compute mean and std for each sample's base series (first channel)
-        base = self.X[:, :, 0]
+        # Pre-compute mean and std for base channel
+        base = self.X[:, :, self.base_pos]
         mu = base.mean(axis=1)
         std = base.std(axis=1)
         std[std == 0] = 1.0
@@ -147,10 +158,10 @@ class _SeriesDataset(Dataset):
 
     def __getitem__(self, idx):
         x = self.X[idx].copy()
-        base = x[:, 0]
         mu = np.float32(self.mu[idx])
         std = np.float32(self.std[idx])
-        x[:, 0] = (base - mu) / std
+        # normalise dynamic channels (including base)
+        x[:, self.dynamic_pos] = (x[:, self.dynamic_pos] - mu) / std
         y = self.y[idx]
         if self.scaler == "revin":
             y = (y - mu) / std
@@ -364,6 +375,9 @@ class PatchTSTTrainer(BaseModel):
         self.id2idx = {}
         self.idx2id = []
         self.oof_records: List[Dict[str, Any]] = []
+        # Channel index maps for dynamic/static features
+        self.dynamic_idx_map: Dict[str, int] = {}
+        self.static_idx_map: Dict[str, int] = {}
 
     def _ensure_torch(self):
         if not TORCH_OK: raise RuntimeError(f"PyTorch not available: {_TORCH_ERR}")
@@ -377,6 +391,10 @@ class PatchTSTTrainer(BaseModel):
             Optional list of fold-specific preprocessors or artifacts.
         """
         self.preprocessors = preprocessors
+        if preprocessors:
+            pp0 = preprocessors[0]
+            self.dynamic_idx_map = getattr(pp0, "patch_dynamic_idx", {})
+            self.static_idx_map = getattr(pp0, "patch_static_idx", {})
         self._ensure_torch(); import torch
         os.makedirs(self.model_dir, exist_ok=True)
         self.oof_records = []
@@ -492,10 +510,12 @@ class PatchTSTTrainer(BaseModel):
         self.models = []
         for i, (tr_mask, va_mask) in enumerate(folds):
             tr_ds = _SeriesDataset(
-                X_train[tr_mask], y_train[tr_mask], series_idx[tr_mask], scaler=self.params.scaler
+                X_train[tr_mask], y_train[tr_mask], series_idx[tr_mask],
+                scaler=self.params.scaler, dynamic_idx=self.dynamic_idx_map
             )
             va_ds = _SeriesDataset(
-                X_train[va_mask], y_train[va_mask], series_idx[va_mask], scaler=self.params.scaler
+                X_train[va_mask], y_train[va_mask], series_idx[va_mask],
+                scaler=self.params.scaler, dynamic_idx=self.dynamic_idx_map
             )
             pin = self.device != "cpu"
             tr_loader = DataLoader(
@@ -678,7 +698,11 @@ class PatchTSTTrainer(BaseModel):
         if series_idx is None:
             series_idx = np.zeros(len(X_eval), dtype=np.int64)
         ds = _SeriesDataset(
-            X_eval, np.zeros((X_eval.shape[0], self.H), dtype=np.float32), series_idx, scaler=self.params.scaler
+            X_eval,
+            np.zeros((X_eval.shape[0], self.H), dtype=np.float32),
+            series_idx,
+            scaler=self.params.scaler,
+            dynamic_idx=self.dynamic_idx_map,
         )
         pin = self.device != "cpu"
         loader = torch.utils.data.DataLoader(
@@ -737,6 +761,8 @@ class PatchTSTTrainer(BaseModel):
             "H": self.H,
             "index": index,
             "id2idx": self.id2idx,
+            "patch_dynamic_idx": self.dynamic_idx_map,
+            "patch_static_idx": self.static_idx_map,
         }
         with open(path.replace(".pt", ".json"), "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
@@ -752,9 +778,13 @@ class PatchTSTTrainer(BaseModel):
                 self.H=int(m.get("H",self.H))
                 index=m.get("index",[])
                 self.id2idx=m.get("id2idx",{})
+                self.dynamic_idx_map=m.get("patch_dynamic_idx",{})
+                self.static_idx_map=m.get("patch_static_idx",{})
         else:
             index=[]
             self.id2idx={}
+            self.dynamic_idx_map={}
+            self.static_idx_map={}
         self.idx2id=[None]*len(self.id2idx)
         for sid,idx in self.id2idx.items():
             self.idx2id[int(idx)] = sid

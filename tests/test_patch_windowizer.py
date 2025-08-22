@@ -35,7 +35,9 @@ def test_patch_windowizer_dynamic_static():
     static_cols = ["feat_static"]
 
     win = SampleWindowizer(lookback=3, horizon=2)
-    X, Y, sids, dates = win.build_patch_train(df, feature_cols, static_cols)
+    X, Y, sids, dates, dyn_idx, stat_idx = win.build_patch_train(
+        df, feature_cols, static_cols
+    )
 
     assert X.shape == (1, 3, 3)
     expected_dyn = df.loc[0:2, [SALES_FILLED_COL, "feat_dyn"]].values
@@ -47,7 +49,11 @@ def test_patch_windowizer_dynamic_static():
     assert win.dynamic_idx["feat_dyn"] == 1
     assert win.static_idx["feat_static"] == 2
 
-    X_eval, sids_eval, dates_eval = win.build_patch_eval(df, feature_cols, static_cols)
+    X_eval, sids_eval, dates_eval, dyn_idx_e, stat_idx_e = win.build_patch_eval(
+        df, feature_cols, static_cols
+    )
+    assert dyn_idx == dyn_idx_e
+    assert stat_idx == stat_idx_e
     assert X_eval.shape == (1, 3, 3)
     expected_eval_dyn = df.loc[2:4, [SALES_FILLED_COL, "feat_dyn"]].values
     expected_eval = np.concatenate([expected_eval_dyn, expected_stat], axis=1)
