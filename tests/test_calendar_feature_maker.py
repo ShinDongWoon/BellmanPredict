@@ -10,6 +10,7 @@ from LGHackerton.preprocess.preprocess_pipeline_v1_1 import (  # noqa: E402
     CalendarFeatureMaker,
     DATE_COL,
     SHOP_COL,
+    Preprocessor,
 )
 
 
@@ -25,13 +26,23 @@ def test_cyclical_reduces_columns_and_variance():
     cyc = CalendarFeatureMaker(dow_mode="cyclical").fit(df).transform(df)
     dum = CalendarFeatureMaker(cyclical=False, dow_mode="cyclical").fit(df).transform(df)
 
+    def _dummy_cols(cols):
+        return [
+            c
+            for c in cols
+            if (c.startswith("month_") or c.startswith("woy_"))
+            and not (c.endswith("_sin") or c.endswith("_cos"))
+        ]
+
+    assert not _dummy_cols(cyc.columns)
+    dum_cols = _dummy_cols(dum.columns)
+    assert dum_cols
+
     cyc_cols = [
         c
         for c in cyc.columns
         if (c.endswith("_sin") or c.endswith("_cos")) and not c.startswith("dow_")
     ]
-    dum_cols = [c for c in dum.columns if c.startswith("month_") or c.startswith("woy_")]
-
     assert len(cyc_cols) < len(dum_cols)
 
     cyc_var = cyc[cyc_cols].var().sum()
@@ -86,3 +97,19 @@ def test_holiday_distance_features():
     assert {"days_since_holiday", "days_to_next_holiday"}.issubset(out.columns)
     assert out["days_since_holiday"].tolist() == [0, 7, 0, 7]
     assert out["days_to_next_holiday"].tolist() == [0, 28, 0, 9999]
+
+
+def test_preprocessor_cyclical_option_controls_dummies():
+    df = _sample_df()
+    out_default = Preprocessor().calendar.fit(df).transform(df)
+    out_dum = Preprocessor(cyclical=False).calendar.fit(df).transform(df)
+
+    dummy = lambda cols: [
+        c
+        for c in cols
+        if (c.startswith("month_") or c.startswith("woy_"))
+        and not (c.endswith("_sin") or c.endswith("_cos"))
+    ]
+
+    assert not dummy(out_default.columns)
+    assert dummy(out_dum.columns)

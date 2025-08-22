@@ -336,14 +336,18 @@ class CalendarFeatureMaker:
             d["month_cos"] = np.cos(2 * np.pi * month / 12)
             d["woy_sin"] = np.sin(2 * np.pi * weekofyear / 52)
             d["woy_cos"] = np.cos(2 * np.pi * weekofyear / 52)
-        else:
+
+        if not self.cyclical:
             d["month"] = d[DATE_COL].dt.month
             d["weekofyear"] = d[DATE_COL].dt.isocalendar().week.astype(int)
             month_dum = pd.get_dummies(d["month"], prefix="month", dtype=np.int8)
             month_dum = month_dum.reindex(columns=self._month_cols, fill_value=0)
             woy_dum = pd.get_dummies(d["weekofyear"], prefix="woy", dtype=np.int8)
             woy_dum = woy_dum.reindex(columns=self._woy_cols, fill_value=0)
-            d = pd.concat([d.drop(columns=["month", "weekofyear"]), month_dum, woy_dum], axis=1)
+            d = pd.concat(
+                [d.drop(columns=["month", "weekofyear"]), month_dum, woy_dum],
+                axis=1,
+            )
 
         d["is_holiday"] = d[DATE_COL].dt.date.isin(self._holiday_cache).astype(np.int8)
 
@@ -758,11 +762,11 @@ class Preprocessor:
     High-level API to fit on train and transform eval with strict leakage control.
     """
 
-    def __init__(self, show_progress: bool = False):
+    def __init__(self, *, cyclical: bool = True, show_progress: bool = False):
         self.guard = LeakGuard()
         self.schema = SchemaNormalizer()
         self.cont_fix = DateContinuityFixer()
-        self.calendar = CalendarFeatureMaker(cyclical=True)
+        self.calendar = CalendarFeatureMaker(cyclical=cyclical)
         self.missing_outlier = MissingAndOutlierHandler()
         self.strict_feats = StrictFeatureMaker()
         self.rich = RichLookupBuilder()
