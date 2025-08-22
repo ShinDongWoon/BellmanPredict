@@ -43,7 +43,7 @@ def test_pipeline_patchtst(tmp_path):
         "PatchTSTTrainer.load=lambda self, path: None\n"
         "\n"
         "def _predict(self, X, sid_idx):\n"
-        "    k = self.params.kappa\n"
+        "    k = 1.0\n"
         "    eps = self.params.epsilon_leaky\n"
         "    import numpy as np\n"
         "    mu = np.full((len(X), self.H), 2.0, dtype=float)\n"
@@ -105,7 +105,7 @@ def test_pipeline_patchtst(tmp_path):
     assert pred_csv.exists()
     pred_df = pd.read_csv(pred_csv)
     kappa = 1.0
-    eps = 1e-8
+    eps = 0.0
     mu = 2.0
     prob = 0.5
     p0 = (kappa / (kappa + mu)) ** kappa
