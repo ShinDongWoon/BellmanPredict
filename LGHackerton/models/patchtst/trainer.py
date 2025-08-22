@@ -702,18 +702,15 @@ class PatchTSTTrainer(BaseModel):
                 mu_s = mu_s.to(self.device, non_blocking=pin)
                 std_s = std_s.to(self.device, non_blocking=pin)
                 preds = [m(xb, sb) for m in self.models]
-                y_preds = []
-                for p, mu_raw, kappa_raw in preds:
-                    mu = F.softplus(mu_raw) + 1e-6
-                    kappa = F.softplus(kappa_raw) + 1e-6
-                    mu_unscaled = mu
-                    if self.params.scaler == "revin":
-                        mu_unscaled = mu * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
-                    y_pred = combine_predictions(
-                        p, mu_unscaled, kappa, self.params.epsilon_leaky
-                    )
-                    y_preds.append(y_pred)
-                out = torch.stack(y_preds).mean(0)
+                p, mu_raw, kappa_raw = zip(*preds)
+                p = torch.stack(p)
+                mu = torch.stack([F.softplus(m) + 1e-6 for m in mu_raw])
+                kappa = torch.stack([F.softplus(k) + 1e-6 for k in kappa_raw])
+                if self.params.scaler == "revin":
+                    mu = mu * std_s.view(1, -1, 1) + mu_s.view(1, -1, 1)
+                out = combine_predictions(
+                    p, mu, kappa, self.params.epsilon_leaky
+                ).mean(0)
                 outs.append(out.cpu().numpy())
         yhat = np.clip(np.concatenate(outs, 0), 0, None)
         return yhat
