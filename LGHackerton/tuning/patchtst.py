@@ -350,7 +350,15 @@ class PatchTSTTuner(HyperparameterTuner):
                     device=device,
                 )
 
-                trainer.train(X, y, series_ids, label_dates, self.cfg, [self.pp])
+                trainer.train(
+                    X,
+                    y,
+                    series_ids,
+                    label_dates,
+                    self.cfg,
+                    [self.pp],
+                    trial=trial,
+                )
                 oof = trainer.get_oof()
                 outlets = oof["series_id"].str.split("::").str[0].values
                 score = weighted_smape_np(
