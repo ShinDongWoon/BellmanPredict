@@ -249,7 +249,7 @@ def combine_predictions(
 def weighted_smape_oof(
     y_true: Tensor,
     clf_prob: Tensor,
-    reg_pred: Tensor,
+    mu: Tensor,
     kappa: Tensor,
     epsilon_leaky: float,
     w: Optional[Tensor] = None,
@@ -262,7 +262,7 @@ def weighted_smape_oof(
         Ground truth demand.
     clf_prob:
         Probability estimates from the classifier.
-    reg_pred:
+    mu:
         Regression predictions representing ``mu_u``.
     kappa:
         Per-sample shape parameters controlling the zero probability.
@@ -271,7 +271,7 @@ def weighted_smape_oof(
     w:
         Optional sample weights.
     """
-    final_pred = combine_predictions(clf_prob, reg_pred, kappa, epsilon_leaky)
+    final_pred = combine_predictions(clf_prob, mu, kappa, epsilon_leaky)
     loss_fn = WeightedSMAPELoss(reduction="mean")
     return loss_fn(final_pred, y_true, w=w)
 
