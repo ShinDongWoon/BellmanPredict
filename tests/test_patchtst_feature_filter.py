@@ -102,3 +102,17 @@ def test_patchtst_drop_series_code():
     assert "series_code" not in pp.patch_feature_cols
     assert "shop_code" in pp.patch_feature_cols
     assert "menu_code" in pp.patch_feature_cols
+
+
+def test_patchtst_drop_series_cv():
+    pp = Preprocessor()
+    pp.guard.set_scope("train")
+
+    pp.feature_cols = ["series_cv", "dow"]
+    pp.static_feature_cols = []
+    pp.dynamic_feature_cols = [c for c in pp.feature_cols]
+
+    pp._compute_patch_features()
+
+    assert "series_cv" not in pp.patch_feature_cols
+    assert "dow" in pp.patch_feature_cols
