@@ -87,3 +87,18 @@ def test_patchtst_intermittency_features():
     assert "zero_run_len" in pp.patch_feature_cols
     assert "zero_ratio_28" not in pp.patch_feature_cols
     assert "days_since_last_sale" not in pp.patch_feature_cols
+
+
+def test_patchtst_drop_series_code():
+    pp = Preprocessor()
+    pp.guard.set_scope("train")
+
+    pp.feature_cols = ["series_code", "shop_code", "menu_code"]
+    pp.static_feature_cols = ["shop_code", "menu_code"]
+    pp.dynamic_feature_cols = [c for c in pp.feature_cols if c not in pp.static_feature_cols]
+
+    pp._compute_patch_features()
+
+    assert "series_code" not in pp.patch_feature_cols
+    assert "shop_code" in pp.patch_feature_cols
+    assert "menu_code" in pp.patch_feature_cols
