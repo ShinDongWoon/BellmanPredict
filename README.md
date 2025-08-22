@@ -10,9 +10,11 @@ mean ``\mu_c`` is then ``\mu_u / (1 - P0)`` and the final prediction becomes::
 
     y_hat = ((1 - \epsilon_{leaky}) * p + \epsilon_{leaky}) * \mu_c
 
-The shape parameter ``kappa`` and the leakage term ``epsilon_leaky`` can be
-configured via ``PATCH_PARAMS`` and control the zero-probability assumption and
-stability of the combination respectively.
+During training the model jointly learns the mean ``\mu`` and shape ``\kappa``
+of a truncated negative binomial distribution, while the binary head employs
+focal loss. The leakage term ``epsilon_leaky``, configurable via ``PATCH_PARAMS``,
+stabilizes the blend by keeping a small positive probability even when the
+classifier predicts zero.
 
 ## Preprocessing
 
