@@ -752,6 +752,7 @@ class SampleWindowizer:
                     continue
                 if static_cols:
                     stat_vals = g.loc[t, static_cols].values.astype(np.int64)
+                    stat_vals = np.clip(stat_vals + 1, 0, None)
                 else:
                     stat_vals = np.empty((0,), dtype=np.int64)
                 X_dyn_list.append(dyn_window)
@@ -815,6 +816,7 @@ class SampleWindowizer:
             dyn_window = g.loc[len(g) - self.L: len(g) - 1, dynamic_cols].values.astype(float)
             if static_cols:
                 stat_vals = g.loc[len(g) - 1, static_cols].values.astype(np.int64)
+                stat_vals = np.clip(stat_vals + 1, 0, None)
             else:
                 stat_vals = np.empty((0,), dtype=np.int64)
             X_dyn_list.append(dyn_window)
