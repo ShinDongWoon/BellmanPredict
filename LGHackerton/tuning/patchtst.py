@@ -38,7 +38,7 @@ class PatchTSTSearchSpace:
     This search space mirrors the recommended tuning ranges:
 
     ``d_model``={128, 256, 384, 512}, ``n_heads``={8, 16}, ``depth`` in [2, 6],
-    ``patch_len``/``stride``={8, 16, 24, 32}, ``dropout`` in [0.10, 0.30],
+    ``patch_len``/``stride``={7,14, 21, 28}, ``dropout`` in [0.10, 0.30],
     ``lr`` in [1e-4, 3e-3], ``weight_decay`` in [1e-5, 1e-3],
     ``id_embed_dim``={16, 32, 64}, ``batch_size``={64, 128},
     ``max_epochs`` in [80, 150], ``patience`` in [15, 30].
@@ -71,15 +71,15 @@ class PatchTSTSearchSpace:
         Inclusive range for early-stopping patience.
     """
 
-    d_model: Tuple[int, ...] = (256, 384, 512)
+    d_model: Tuple[int, ...] = (256, 384)
     n_heads: Tuple[int, ...] = (8, 16)
-    depth: Tuple[int, int] = (2, 6)
-    patch_len: Tuple[int, ...] = (8, 16, 24, 32)
-    stride: Tuple[int, ...] = (8, 16, 24, 32)
+    depth: Tuple[int, int] = (2, 3, 4)
+    patch_len: Tuple[int, ...] = (7, 14)
+    stride: Tuple[int, ...] = (7)
     dropout: Tuple[float, float] = (0.10, 0.30)
-    lr: Tuple[float, float] = (1e-5, 5e-4)
+    lr: Tuple[float, float] = (1e-4, 5e-4)
     weight_decay: Tuple[float, float] = (1e-5, 1e-3)
-    id_embed_dim: Tuple[int, ...] = (16, 32, 64)
+    id_embed_dim: Tuple[int, ...] = (32, 64)
     batch_size: Tuple[int, ...] = (64, 128)
     max_epochs: Tuple[int, int] = (80, 150)
     patience: Tuple[int, int] = (15, 30)
@@ -207,7 +207,7 @@ class PatchTSTTuner(HyperparameterTuner):
         if not TORCH_OK:
             raise RuntimeError("PyTorch not available for PatchTST")
 
-        input_lens = getattr(self.cfg, "input_lens", None) or [96, 128, 168]
+        input_lens = getattr(self.cfg, "input_lens", None) or [336, 448, 720]
         if not isinstance(input_lens, (list, tuple)):
             input_lens = [input_lens]
 
