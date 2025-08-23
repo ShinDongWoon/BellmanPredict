@@ -311,13 +311,12 @@ class PatchTSTTuner(HyperparameterTuner):
                 self.pp.patch_dynamic_idx = dyn_idx.copy()
                 self.pp.patch_static_idx = stat_idx.copy()
                 reg_mode = trial.suggest_categorical("reg_mode", ["light", "strong"])
+                dropout = trial.suggest_float("dropout", *search.dropout)
                 if reg_mode == "light":
-                    dropout = trial.suggest_float("dropout", 0.40, 0.50)
                     weight_decay = trial.suggest_float(
                         "weight_decay", 1e-4, 3e-4, log=True
                     )
                 else:
-                    dropout = trial.suggest_float("dropout", 0.50, 0.60)
                     weight_decay = trial.suggest_float(
                         "weight_decay", 3e-4, 5e-4, log=True
                     )
