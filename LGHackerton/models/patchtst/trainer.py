@@ -119,7 +119,7 @@ class PatchTSTParams:
     lambda_clf: float = 1.0
     lambda_s: float = 0.05
     gamma: float = 2.0
-    alpha: float = 0.25
+    alpha: float = 0.5
     epsilon_leaky: float = 0.0
     scaler: str = "per_series"
     channel_fusion: str = "attention"
