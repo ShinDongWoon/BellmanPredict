@@ -187,14 +187,14 @@ class _SeriesDataset(Dataset):
         y = self.y[idx]
         if self.scaler == "revin":
             y = (y - self.mu_base[idx]) / self.std_base[idx]
-        s_static = self.S[idx].copy()
+        static_codes = self.S[idx].copy()
         return (
             x,
             y,
             int(self.sids[idx]),
             np.float32(self.mu_base[idx]),
             np.float32(self.std_base[idx]),
-            s_static,
+            static_codes,
         )
 
 
@@ -650,15 +650,15 @@ class PatchTSTTrainer(BaseModel):
                 net.train()
                 nb_sum = clf_sum = s_sum = 0.0
                 batch_count = 0
-                for xb, yb, sb, mu_s, std_s, statb in tr_loader:
+                for xb, yb, sb, mu_s, std_s, static_codes in tr_loader:
                     xb = xb.to(self.device, non_blocking=pin)
                     yb = yb.to(self.device, non_blocking=pin)
                     sb = sb.to(self.device, non_blocking=pin)
                     mu_s = mu_s.to(self.device, non_blocking=pin)
                     std_s = std_s.to(self.device, non_blocking=pin)
-                    statb = statb.to(self.device, non_blocking=pin)
+                    static_codes = static_codes.to(self.device, non_blocking=pin)
                     opt.zero_grad()
-                    p, mu_raw, kappa_raw = net(xb, sb, statb)
+                    p, mu_raw, kappa_raw = net(xb, sb, static_codes)
                     mu = F.softplus(mu_raw) + 1e-6
                     kappa = F.softplus(kappa_raw) + 1e-6
                     y_raw = yb
@@ -704,14 +704,14 @@ class PatchTSTTrainer(BaseModel):
                 T = []
                 S = []
                 with torch.no_grad():
-                    for xb, yb, sb, mu_s, std_s, statb in va_loader:
+                    for xb, yb, sb, mu_s, std_s, static_codes in va_loader:
                         xb = xb.to(self.device, non_blocking=pin)
                         yb = yb.to(self.device, non_blocking=pin)
                         sb = sb.to(self.device, non_blocking=pin)
                         mu_s = mu_s.to(self.device, non_blocking=pin)
                         std_s = std_s.to(self.device, non_blocking=pin)
-                        statb = statb.to(self.device, non_blocking=pin)
-                        p, mu_raw, kappa_raw = net(xb, sb, statb)
+                        static_codes = static_codes.to(self.device, non_blocking=pin)
+                        p, mu_raw, kappa_raw = net(xb, sb, static_codes)
                         mu = F.softplus(mu_raw) + 1e-6
                         kappa = F.softplus(kappa_raw) + 1e-6
                         mu_unscaled = mu
@@ -761,14 +761,14 @@ class PatchTSTTrainer(BaseModel):
             Y = []
             S = []
             with torch.no_grad():
-                for xb, yb, sb, mu_s, std_s, statb in va_loader:
+                for xb, yb, sb, mu_s, std_s, static_codes in va_loader:
                     xb = xb.to(self.device, non_blocking=pin)
                     yb = yb.to(self.device, non_blocking=pin)
                     sb = sb.to(self.device, non_blocking=pin)
                     mu_s = mu_s.to(self.device, non_blocking=pin)
                     std_s = std_s.to(self.device, non_blocking=pin)
-                    statb = statb.to(self.device, non_blocking=pin)
-                    p, mu_raw, kappa_raw = net(xb, sb, statb)
+                    static_codes = static_codes.to(self.device, non_blocking=pin)
+                    p, mu_raw, kappa_raw = net(xb, sb, static_codes)
                     mu = F.softplus(mu_raw) + 1e-6
                     kappa = F.softplus(kappa_raw) + 1e-6
                     mu_unscaled = mu
@@ -828,13 +828,13 @@ class PatchTSTTrainer(BaseModel):
         )
         outs = []
         with torch.no_grad():
-            for xb, _, sb, mu_s, std_s, statb in loader:
+            for xb, _, sb, mu_s, std_s, static_codes in loader:
                 xb = xb.to(self.device, non_blocking=pin)
                 sb = sb.to(self.device, non_blocking=pin)
                 mu_s = mu_s.to(self.device, non_blocking=pin)
                 std_s = std_s.to(self.device, non_blocking=pin)
-                statb = statb.to(self.device, non_blocking=pin)
-                preds = [m(xb, sb, statb) for m in self.models]
+                static_codes = static_codes.to(self.device, non_blocking=pin)
+                preds = [m(xb, sb, static_codes) for m in self.models]
                 p, mu_raw, kappa_raw = zip(*preds)
                 p = torch.stack(p)
                 mu = torch.stack([F.softplus(m) + 1e-6 for m in mu_raw])
@@ -884,6 +884,7 @@ class PatchTSTTrainer(BaseModel):
             "id2idx": self.id2idx,
             "patch_dynamic_idx": self.dynamic_idx_map,
             "patch_static_idx": self.static_idx_map,
+            "static_cardinalities": self.params.static_cardinalities,
         }
         with open(path.replace(".pt", ".json"), "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
@@ -895,6 +896,11 @@ class PatchTSTTrainer(BaseModel):
             with open(meta,"r",encoding="utf-8") as f:
                 m=json.load(f)
                 self.model_params=m.get("params",self.model_params)
+                # ensure embedding cardinalities are available when rebuilding
+                self.model_params["static_cardinalities"] = m.get(
+                    "static_cardinalities",
+                    self.model_params.get("static_cardinalities", []),
+                )
                 self.L=int(m.get("L",self.L))
                 self.H=int(m.get("H",self.H))
                 index=m.get("index",[])
