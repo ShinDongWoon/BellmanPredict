@@ -246,6 +246,57 @@ def combine_predictions(
     return ((1 - epsilon) * p + epsilon) * cond_mean
 
 
+def combine_predictions_thresholded(
+    p: Tensor,
+    mu: Tensor,
+    kappa: Tensor,
+    tau: Tensor | float,
+    T: float,
+    hard: bool = False,
+) -> Tensor:
+    """Combine classifier probability with a learned threshold.
+
+    Parameters
+    ----------
+    p:
+        Classifier probability for non-zero demand.
+    mu:
+        Regression model prediction corresponding to the unconditional mean.
+    kappa:
+        Shape parameter controlling the zero probability ``P0``.
+    tau:
+        Threshold applied to ``p``.  Can be a scalar or a tensor broadcastable
+        to the shape of ``p``/``mu``.
+    T:
+        Temperature parameter used for the smooth gate during training.
+    hard:
+        If ``True`` use a hard gate ``(p >= tau)`` suitable for inference,
+        otherwise use a differentiable sigmoid gate.
+
+    Returns
+    -------
+    Tensor
+        Final demand prediction after conditional mean adjustment and
+        thresholding.
+    """
+
+    mu = mu.to(p.dtype)
+    kappa = torch.clamp(
+        torch.as_tensor(kappa, dtype=mu.dtype, device=mu.device), min=1e-8
+    )
+    tau = torch.as_tensor(tau, dtype=mu.dtype, device=mu.device)
+
+    p0 = torch.pow(kappa / (kappa + mu), kappa)
+    cond_mean = mu / torch.clamp(1.0 - p0, min=1e-6)
+
+    if hard:
+        gate = (p >= tau).to(mu.dtype)
+    else:
+        gate = torch.sigmoid((p - tau) / T)
+
+    return gate * cond_mean
+
+
 def weighted_smape_oof(
     y_true: Tensor,
     clf_prob: Tensor,

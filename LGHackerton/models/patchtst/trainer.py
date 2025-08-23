@@ -20,7 +20,12 @@ from LGHackerton.models.base_trainer import BaseModel, TrainConfig
 from LGHackerton.utils.metrics import smape, weighted_smape_np, PRIORITY_OUTLETS
 from LGHackerton.preprocess import Preprocessor, L as DEFAULT_L, H as DEFAULT_H
 from LGHackerton.preprocess.preprocess_pipeline_v1_1 import SALES_FILLED_COL
-from .train import trunc_nb_nll, focal_loss, WeightedSMAPELoss, combine_predictions
+from .train import (
+    trunc_nb_nll,
+    focal_loss,
+    WeightedSMAPELoss,
+    combine_predictions_thresholded,
+)
 
 @dataclass
 class PatchTSTParams:
@@ -121,6 +126,8 @@ class PatchTSTParams:
     gamma: float = 2.0
     alpha: float = 0.5
     epsilon_leaky: float = 0.0
+    tau: float = 0.5
+    T: float = 1.0
     scaler: str = "per_series"
     channel_fusion: str = "attention"
     num_workers: int = 0
@@ -467,6 +474,7 @@ class PatchTSTTrainer(BaseModel):
         # Channel index maps for dynamic/static features
         self.dynamic_idx_map: Dict[str, int] = {}
         self.static_idx_map: Dict[str, int] = {}
+        self.tau_map: Dict[str, List[float]] = {}
 
     def _ensure_torch(self):
         if not TORCH_OK: raise RuntimeError(f"PyTorch not available: {_TORCH_ERR}")
@@ -706,9 +714,10 @@ class PatchTSTTrainer(BaseModel):
                     nb_loss = trunc_nb_nll(y_raw, mu_unscaled, kappa)
                     L_nb = (nb_loss * w * z).sum() / torch.clamp(z.sum(), min=1.0)
                     L_clf = focal_loss(p, z, self.params.gamma, self.params.alpha, w)
-                    P0 = torch.pow(kappa / (kappa + mu_unscaled), kappa)
-                    cond_mean = mu_unscaled / torch.clamp(1.0 - P0, min=1e-6)
-                    y_hat = ((1 - self.params.epsilon_leaky) * p + self.params.epsilon_leaky) * cond_mean
+                    tau = torch.full_like(mu_unscaled, self.params.tau)
+                    y_hat = combine_predictions_thresholded(
+                        p, mu_unscaled, kappa, tau, self.params.T, hard=False
+                    )
                     L_s = smape_loss(y_hat, y_raw, w)
                     loss = (
                         self.params.lambda_nb * L_nb
@@ -744,8 +753,9 @@ class PatchTSTTrainer(BaseModel):
                         if self.params.scaler == "revin":
                             mu_unscaled = mu * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
                             yb = yb * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
-                        final = combine_predictions(
-                            p, mu_unscaled, kappa, self.params.epsilon_leaky
+                        tau = torch.full_like(mu_unscaled, self.params.tau)
+                        final = combine_predictions_thresholded(
+                            p, mu_unscaled, kappa, tau, self.params.T, hard=True
                         )
                         P.append(final.cpu().numpy())
                         T.append(yb.cpu().numpy())
@@ -786,6 +796,7 @@ class PatchTSTTrainer(BaseModel):
             P = []
             Y = []
             S = []
+            P_clf = []
             with torch.no_grad():
                 for xb, yb, sb, mu_s, std_s, static_codes in va_loader:
                     xb = xb.to(self.device, non_blocking=pin)
@@ -801,26 +812,32 @@ class PatchTSTTrainer(BaseModel):
                     if self.params.scaler == "revin":
                         mu_unscaled = mu * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
                         yb = yb * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
-                    final = combine_predictions(
-                        p, mu_unscaled, kappa, self.params.epsilon_leaky
+                    tau = torch.full_like(mu_unscaled, self.params.tau)
+                    final = combine_predictions_thresholded(
+                        p, mu_unscaled, kappa, tau, self.params.T, hard=True
                     )
                     final = final.cpu()
                     P.append(final.numpy())
                     Y.append(yb.cpu().numpy())
                     S.extend(sb.cpu().tolist())
+                    prob = p.detach().cpu().numpy()
+                    P_clf.append(prob)
             y_pred = np.clip(np.concatenate(P, 0), 0, None)
             y_true = np.concatenate(Y, 0)
             series_ids_val = np.array([self.idx2id[int(i)] for i in S])
+            p_clf = np.concatenate(P_clf, 0)
             oof_df = pd.DataFrame(
                 {
                     "series_id": np.repeat(series_ids_val, self.H),
                     "h": np.tile(np.arange(1, self.H + 1), len(series_ids_val)),
                     "y": y_true.reshape(-1),
                     "yhat": y_pred.reshape(-1),
+                    "p": p_clf.reshape(-1),
                 }
             )
             self.oof_records.extend(oof_df.to_dict("records"))
             self.models.append(net)
+        self._calibrate_tau()
         self.save(os.path.join(self.model_dir,"patchtst.pt"))
     def predict(
         self,
@@ -867,8 +884,19 @@ class PatchTSTTrainer(BaseModel):
                 kappa = torch.stack([F.softplus(k) + 1e-6 for k in kappa_raw])
                 if self.params.scaler == "revin":
                     mu = mu * std_s.view(1, -1, 1) + mu_s.view(1, -1, 1)
-                out = combine_predictions(
-                    p, mu, kappa, self.params.epsilon_leaky
+                if getattr(self, "tau_map", None):
+                    tau_vals = [
+                        self.tau_map.get(
+                            self.idx2id[int(i.item())],
+                            [self.params.tau] * self.H,
+                        )
+                        for i in sb
+                    ]
+                    tau = torch.tensor(tau_vals, device=self.device, dtype=mu.dtype)
+                else:
+                    tau = torch.full((sb.shape[0], self.H), self.params.tau, device=self.device, dtype=mu.dtype)
+                out = combine_predictions_thresholded(
+                    p, mu, kappa, tau, self.params.T, hard=True
                 ).mean(0)
                 outs.append(out.cpu().numpy())
         yhat = np.clip(np.concatenate(outs, 0), 0, None)
@@ -893,6 +921,39 @@ class PatchTSTTrainer(BaseModel):
     def get_oof(self) -> pd.DataFrame:
         return pd.DataFrame(self.oof_records)
 
+    def _calibrate_tau(self) -> None:
+        """Calibrate classifier thresholds using OOF probabilities."""
+        if not self.oof_records:
+            self.tau_map = {}
+            return
+        df = pd.DataFrame(self.oof_records)
+        if "p" not in df.columns:
+            self.tau_map = {}
+            return
+        tau_map: Dict[str, List[float]] = {}
+        for sid, grp in df.groupby("series_id"):
+            tau_vec: List[float] = []
+            for h in range(1, self.H + 1):
+                gh = grp[grp["h"] == h]
+                if gh.empty:
+                    tau_vec.append(self.params.tau)
+                    continue
+                p = gh["p"].values
+                y = gh["y"].values
+                if (y > 0).any() and (y == 0).any():
+                    best_t = self.params.tau
+                    best_err = np.inf
+                    for t in np.linspace(0.0, 1.0, 101):
+                        err = np.mean((p >= t) != (y > 0))
+                        if err < best_err:
+                            best_err = err
+                            best_t = t
+                    tau_vec.append(float(best_t))
+                else:
+                    tau_vec.append(self.params.tau)
+            tau_map[str(sid)] = tau_vec
+        self.tau_map = tau_map
+
     def save(self, path:str)->None:
         if not TORCH_OK: return
         import torch
@@ -911,6 +972,7 @@ class PatchTSTTrainer(BaseModel):
             "patch_dynamic_idx": self.dynamic_idx_map,
             "patch_static_idx": self.static_idx_map,
             "static_cardinalities": self.params.static_cardinalities,
+            "tau_map": self.tau_map,
         }
         with open(path.replace(".pt", ".json"), "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
@@ -933,11 +995,13 @@ class PatchTSTTrainer(BaseModel):
                 self.id2idx=m.get("id2idx",{})
                 self.dynamic_idx_map=m.get("patch_dynamic_idx",{})
                 self.static_idx_map=m.get("patch_static_idx",{})
+                self.tau_map=m.get("tau_map",{})
         else:
             index=[]
             self.id2idx={}
             self.dynamic_idx_map={}
             self.static_idx_map={}
+            self.tau_map={}
         self.idx2id=[None]*len(self.id2idx)
         for sid,idx in self.id2idx.items():
             self.idx2id[int(idx)] = sid
