@@ -42,6 +42,11 @@ class PatchTSTParams:
         Dropout applied inside Transformer blocks.
     id_embed_dim : int
         Dimensionality of optional series ID embeddings. Set to ``0`` to disable.
+    static_embed_dim : int
+        Dimensionality of embeddings used for static categorical features.
+    static_cardinalities : Optional[List[int]]
+        Number of classes for each static categorical feature. Computed from
+        the data and used to size embedding layers.
     enable_covariates : bool
         Whether input windows contain additional covariate channels beyond the
         primary target series.
@@ -99,6 +104,8 @@ class PatchTSTParams:
     stride: int = 1
     dropout: float = 0.1
     id_embed_dim: int = 16
+    static_embed_dim: int = 16
+    static_cardinalities: Optional[List[int]] = None
     enable_covariates: bool = True
     input_dim: int = 1
     lr: float = 1e-3
@@ -266,6 +273,8 @@ if TORCH_OK:
             id_embed_dim: int = 0,
             num_series: int = 0,
             input_dim: int = 1,
+            static_cardinalities: Optional[Iterable[int]] = None,
+            static_emb_dim: int = 16,
         ):
             super().__init__()
             self.L, self.H = L, H
@@ -288,7 +297,20 @@ if TORCH_OK:
                 self.id_embed = None
                 self.id_proj = None
 
-        def forward(self, x, sid_idx=None):
+            self.static_embeds = nn.ModuleList()
+            self.static_mlp = None
+            if static_cardinalities:
+                self.static_embeds = nn.ModuleList(
+                    [nn.Embedding(nc + 1, static_emb_dim, padding_idx=0) for nc in static_cardinalities]
+                )
+                in_dim = len(static_cardinalities) * static_emb_dim
+                self.static_mlp = nn.Sequential(
+                    nn.Linear(in_dim, d_model * 2),
+                    nn.GELU(),
+                    nn.Linear(d_model * 2, d_model * 2),
+                )
+
+        def forward(self, x, sid_idx=None, static_codes=None):
             B, L, C = x.shape
             p = x.unfold(1, self.patch_len, self.stride)  # (B, n_patches, patch_len, C)
             p = p.contiguous().view(B, -1, self.patch_len * C)
@@ -298,6 +320,14 @@ if TORCH_OK:
                 if self.id_proj is not None:
                     e = self.id_proj(e)
                 z = z + e.unsqueeze(1)
+            if self.static_mlp is not None and static_codes is not None:
+                embs = []
+                for i, emb in enumerate(self.static_embeds):
+                    embs.append(emb(static_codes[:, i].long()))
+                stat = torch.cat(embs, dim=-1)
+                gamma_beta = self.static_mlp(stat)
+                gamma, beta = gamma_beta.chunk(2, dim=-1)
+                z = gamma.unsqueeze(1) * z + beta.unsqueeze(1)
             for blk in self.blocks:
                 z = blk(z)
             z = self.norm(z).mean(1)
@@ -460,6 +490,12 @@ class PatchTSTTrainer(BaseModel):
         self.id2idx = {sid:i for i,sid in enumerate(unique_sids)}
         self.idx2id = unique_sids
         series_idx = np.array([self.id2idx[s] for s in series_ids], dtype=np.int64)
+        if S_train.size > 0:
+            static_cardinalities = [int(S_train[:, j].max()) for j in range(S_train.shape[1])]
+        else:
+            static_cardinalities = []
+        self.params.static_cardinalities = static_cardinalities
+        self.model_params["static_cardinalities"] = static_cardinalities
         # compute per-series weights based on zero ratio
         self.series_weight_map = {}
         for sid, idx in self.id2idx.items():
@@ -604,6 +640,8 @@ class PatchTSTTrainer(BaseModel):
                 self.params.id_embed_dim,
                 len(self.id2idx),
                 self.params.input_dim,
+                self.params.static_cardinalities,
+                self.params.static_embed_dim,
             ).to(self.device)
             opt = torch.optim.AdamW(net.parameters(), lr=self.params.lr, weight_decay=self.params.weight_decay)
             smape_loss = WeightedSMAPELoss(reduction="mean")
@@ -620,7 +658,7 @@ class PatchTSTTrainer(BaseModel):
                     std_s = std_s.to(self.device, non_blocking=pin)
                     statb = statb.to(self.device, non_blocking=pin)
                     opt.zero_grad()
-                    p, mu_raw, kappa_raw = net(xb, sb)
+                    p, mu_raw, kappa_raw = net(xb, sb, statb)
                     mu = F.softplus(mu_raw) + 1e-6
                     kappa = F.softplus(kappa_raw) + 1e-6
                     y_raw = yb
@@ -673,7 +711,7 @@ class PatchTSTTrainer(BaseModel):
                         mu_s = mu_s.to(self.device, non_blocking=pin)
                         std_s = std_s.to(self.device, non_blocking=pin)
                         statb = statb.to(self.device, non_blocking=pin)
-                        p, mu_raw, kappa_raw = net(xb, sb)
+                        p, mu_raw, kappa_raw = net(xb, sb, statb)
                         mu = F.softplus(mu_raw) + 1e-6
                         kappa = F.softplus(kappa_raw) + 1e-6
                         mu_unscaled = mu
@@ -730,7 +768,7 @@ class PatchTSTTrainer(BaseModel):
                     mu_s = mu_s.to(self.device, non_blocking=pin)
                     std_s = std_s.to(self.device, non_blocking=pin)
                     statb = statb.to(self.device, non_blocking=pin)
-                    p, mu_raw, kappa_raw = net(xb, sb)
+                    p, mu_raw, kappa_raw = net(xb, sb, statb)
                     mu = F.softplus(mu_raw) + 1e-6
                     kappa = F.softplus(kappa_raw) + 1e-6
                     mu_unscaled = mu
@@ -796,7 +834,7 @@ class PatchTSTTrainer(BaseModel):
                 mu_s = mu_s.to(self.device, non_blocking=pin)
                 std_s = std_s.to(self.device, non_blocking=pin)
                 statb = statb.to(self.device, non_blocking=pin)
-                preds = [m(xb, sb) for m in self.models]
+                preds = [m(xb, sb, statb) for m in self.models]
                 p, mu_raw, kappa_raw = zip(*preds)
                 p = torch.stack(p)
                 mu = torch.stack([F.softplus(m) + 1e-6 for m in mu_raw])
@@ -886,6 +924,8 @@ class PatchTSTTrainer(BaseModel):
                 self.params.id_embed_dim,
                 len(self.id2idx),
                 self.params.input_dim,
+                self.params.static_cardinalities,
+                self.params.static_embed_dim,
             )
             net.load_state_dict(torch.load(os.path.join(self.model_dir,fname), map_location=torch.device(self.device)))
             net.to(self.device)
