@@ -97,7 +97,7 @@ class PatchTSTParams:
         Number of worker processes used by :class:`torch.utils.data.DataLoader`.
     """
 
-    d_model: int = 128
+    d_model: int = 512
     n_heads: int = 8
     depth: int = 4
     patch_len: int = 4
