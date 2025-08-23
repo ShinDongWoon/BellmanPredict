@@ -73,12 +73,14 @@ class PatchTSTParams:
         Gamma parameter for focal loss.
     alpha : float
         Alpha parameter for focal loss.
-    epsilon_leaky : float
-        Small constant added for numerical stability in leaky operations.
-    scaler : str
-        Scaling strategy ("per_series" or "revin").
-    val_policy : str
-        Validation split policy.
+        epsilon_leaky : float
+            Small constant added for numerical stability in leaky operations.
+        scaler : str
+            Scaling strategy ("per_series" or "revin").
+        channel_fusion : str
+            Strategy to combine channel representations ("attention", "linear" or "mean").
+        val_policy : str
+            Validation split policy.
     val_ratio : float
         Ratio for the validation split when ``val_policy`` is ``"ratio"``.
     val_span_days : int
@@ -120,6 +122,7 @@ class PatchTSTParams:
     alpha: float = 0.25
     epsilon_leaky: float = 0.0
     scaler: str = "per_series"
+    channel_fusion: str = "attention"
     num_workers: int = 0
     # validation settings (mirrors TrainConfig)
     val_policy: str = "ratio"
@@ -275,14 +278,25 @@ if TORCH_OK:
             input_dim: int = 1,
             static_cardinalities: Optional[Iterable[int]] = None,
             static_emb_dim: int = 16,
+            channel_fusion: str = "attention",
         ):
             super().__init__()
             self.L, self.H = L, H
             self.patch_len = patch_len
             self.stride = stride
-            self.proj = nn.Linear(patch_len * input_dim, d_model)
+            # project each channel's patch separately
+            self.proj = nn.Linear(patch_len, d_model)
             self.blocks = nn.ModuleList([PatchTSTBlock(d_model, n_heads, dropout) for _ in range(depth)])
             self.norm = nn.LayerNorm(d_model)
+            self.channel_fusion = channel_fusion
+            if channel_fusion == "attention":
+                self.channel_query = nn.Parameter(torch.randn(1, 1, d_model))
+                self.channel_attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
+            elif channel_fusion == "linear":
+                self.channel_lin = nn.Linear(d_model, 1)
+            else:
+                self.channel_attn = None
+                self.channel_lin = None
             # separate heads for classification and regression
             self.reg_head = nn.Sequential(
                 nn.Linear(d_model, d_model), nn.GELU(), nn.Linear(d_model, 2 * H)
@@ -313,13 +327,13 @@ if TORCH_OK:
         def forward(self, x, sid_idx=None, static_codes=None):
             B, L, C = x.shape
             p = x.unfold(1, self.patch_len, self.stride)  # (B, n_patches, patch_len, C)
-            p = p.contiguous().view(B, -1, self.patch_len * C)
-            z = self.proj(p)
+            p = p.permute(0, 1, 3, 2).contiguous()  # (B, n_patches, C, patch_len)
+            z = self.proj(p)  # (B, n_patches, C, d_model)
             if self.id_embed is not None and sid_idx is not None:
                 e = self.id_embed(sid_idx)
                 if self.id_proj is not None:
                     e = self.id_proj(e)
-                z = z + e.unsqueeze(1)
+                z = z + e.unsqueeze(1).unsqueeze(2)
             if self.static_mlp is not None and static_codes is not None:
                 embs = []
                 for i, emb in enumerate(self.static_embeds):
@@ -327,10 +341,22 @@ if TORCH_OK:
                 stat = torch.cat(embs, dim=-1)
                 gamma_beta = self.static_mlp(stat)
                 gamma, beta = gamma_beta.chunk(2, dim=-1)
-                z = gamma.unsqueeze(1) * z + beta.unsqueeze(1)
+                z = gamma.unsqueeze(1).unsqueeze(1) * z + beta.unsqueeze(1).unsqueeze(1)
+            B, n_patches, C, _ = z.shape
+            z = z.view(B * C, n_patches, -1)
             for blk in self.blocks:
                 z = blk(z)
-            z = self.norm(z).mean(1)
+            z = z.view(B, C, n_patches, -1)
+            z = self.norm(z).mean(2)  # (B, C, d_model)
+            if self.channel_fusion == "attention" and self.channel_attn is not None:
+                q = self.channel_query.expand(B, -1, -1)
+                z, _ = self.channel_attn(q, z, z)
+                z = z.squeeze(1)
+            elif self.channel_fusion == "linear" and self.channel_lin is not None:
+                w = torch.softmax(self.channel_lin(z).squeeze(-1), dim=1).unsqueeze(-1)
+                z = (w * z).sum(dim=1)
+            else:  # mean
+                z = z.mean(dim=1)
             params = self.reg_head(z)
             mu_raw, kappa_raw = params.chunk(2, dim=-1)
             p_clf = self.clf_head(z)
@@ -642,6 +668,7 @@ class PatchTSTTrainer(BaseModel):
                 self.params.input_dim,
                 self.params.static_cardinalities,
                 self.params.static_embed_dim,
+                self.params.channel_fusion,
             ).to(self.device)
             opt = torch.optim.AdamW(net.parameters(), lr=self.params.lr, weight_decay=self.params.weight_decay)
             smape_loss = WeightedSMAPELoss(reduction="mean")
@@ -932,6 +959,7 @@ class PatchTSTTrainer(BaseModel):
                 self.params.input_dim,
                 self.params.static_cardinalities,
                 self.params.static_embed_dim,
+                self.params.channel_fusion,
             )
             net.load_state_dict(torch.load(os.path.join(self.model_dir,fname), map_location=torch.device(self.device)))
             net.to(self.device)
