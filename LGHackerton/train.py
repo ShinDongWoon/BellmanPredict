@@ -160,7 +160,7 @@ def run_training(ctx: PipelineContext) -> None:
     except AttributeError as e:
         raise RuntimeError(f"{ctx.model_name} build_dataset not implemented") from e
     try:
-        X_train, y_train, series_ids, label_dates = build_dataset(
+        X_train, S_train, y_train, series_ids, label_dates = build_dataset(
             ctx.preprocessor, ctx.df_full, ctx.input_len
         )
     except NotImplementedError as e:
@@ -181,7 +181,15 @@ def run_training(ctx: PipelineContext) -> None:
         if ctx.input_len is not None:
             trainer.L = ctx.input_len
         trainer.H = ctx.preprocessor.windowizer.H
-    trainer.train(X_train, y_train, series_ids, label_dates, ctx.cfg, [ctx.preprocessor])
+    trainer.train(
+        X_train,
+        S_train,
+        y_train,
+        series_ids,
+        label_dates,
+        ctx.cfg,
+        [ctx.preprocessor],
+    )
     ctx.oof_df = trainer.get_oof()
     model_path = ARTIFACTS_DIR / "models" / f"{ctx.model_name}.pt"
     if not model_path.exists():
