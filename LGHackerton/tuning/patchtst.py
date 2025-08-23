@@ -207,7 +207,7 @@ class PatchTSTTuner(HyperparameterTuner):
         if not TORCH_OK:
             raise RuntimeError("PyTorch not available for PatchTST")
 
-        input_lens = getattr(self.cfg, "input_lens", None) or [336, 448, 720]
+        input_lens = getattr(self.cfg, "input_lens", None) or [336, 448]
         if not isinstance(input_lens, (list, tuple)):
             input_lens = [input_lens]
 
