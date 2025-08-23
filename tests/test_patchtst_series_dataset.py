@@ -12,8 +12,8 @@ def test_series_dataset_requires_dynamic_channel(dyn_idx):
         _SeriesDataset(X, y, dyn_idx=dyn_idx, static_idx=[0])
 
 
-def test_revin_normalizes_only_target_channel():
-    """Ensure RevIN scaling applies only to the target channel."""
+def test_revin_normalizes_all_dynamic_channels():
+    """Ensure RevIN scaling applies to all dynamic channels."""
     X = np.array([
         [[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]],
     ], dtype=np.float32)
@@ -22,7 +22,8 @@ def test_revin_normalizes_only_target_channel():
     x, *_ = ds[0]
 
     tgt = X[0, :, 0]
-    expected = (tgt - tgt.mean()) / tgt.std()
-    assert np.allclose(x[:, 0], expected)
-    # second dynamic channel should remain unchanged
-    assert np.allclose(x[:, 1], X[0, :, 1])
+    expected0 = (tgt - tgt.mean()) / tgt.std()
+    assert np.allclose(x[:, 0], expected0)
+    dyn2 = X[0, :, 1]
+    expected1 = (dyn2 - dyn2.mean()) / dyn2.std()
+    assert np.allclose(x[:, 1], expected1)

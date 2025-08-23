@@ -171,9 +171,8 @@ class _SeriesDataset(Dataset):
         x = self.X[idx].copy()
         mu = np.float32(self.mu[idx])
         std = np.float32(self.std[idx])
-        # normalise only the target dynamic channel
-        tgt_ch = self.dyn_idx[0]
-        x[:, tgt_ch] = (x[:, tgt_ch] - mu[0]) / std[0]
+        # normalise all dynamic channels using their own statistics
+        x[:, self.dyn_idx] = (x[:, self.dyn_idx] - mu) / std
         y = self.y[idx]
         if self.scaler == "revin":
             y = (y - self.mu_base[idx]) / self.std_base[idx]
