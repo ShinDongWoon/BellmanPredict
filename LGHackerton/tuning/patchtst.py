@@ -71,13 +71,13 @@ class PatchTSTSearchSpace:
         Inclusive range for early-stopping patience.
     """
 
-    d_model: Tuple[int, ...] = (128, 256, 384, 512)
+    d_model: Tuple[int, ...] = (256, 384, 512)
     n_heads: Tuple[int, ...] = (8, 16)
     depth: Tuple[int, int] = (2, 6)
     patch_len: Tuple[int, ...] = (8, 16, 24, 32)
     stride: Tuple[int, ...] = (8, 16, 24, 32)
     dropout: Tuple[float, float] = (0.10, 0.30)
-    lr: Tuple[float, float] = (1e-4, 3e-3)
+    lr: Tuple[float, float] = (1e-5, 5e-4)
     weight_decay: Tuple[float, float] = (1e-5, 1e-3)
     id_embed_dim: Tuple[int, ...] = (16, 32, 64)
     batch_size: Tuple[int, ...] = (64, 128)
