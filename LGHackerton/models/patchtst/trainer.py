@@ -129,6 +129,7 @@ class _SeriesDataset(Dataset):
         self,
         X: np.ndarray,
         y: np.ndarray,
+        S: Optional[np.ndarray] = None,
         series_ids: Optional[Iterable[int]] = None,
         scaler: str = "per_series",
         dyn_idx: Optional[Iterable[int]] = None,
@@ -139,6 +140,9 @@ class _SeriesDataset(Dataset):
             X = X[..., None]
         self.X = X
         self.y = y.astype(np.float32)
+        if S is None:
+            S = np.zeros((len(X), 0), dtype=np.int64)
+        self.S = S.astype(np.int64)
         if series_ids is None:
             series_ids = [0 for _ in range(len(X))]
         self.sids = np.array(list(series_ids), dtype=np.int64)
@@ -176,7 +180,15 @@ class _SeriesDataset(Dataset):
         y = self.y[idx]
         if self.scaler == "revin":
             y = (y - self.mu_base[idx]) / self.std_base[idx]
-        return x, y, int(self.sids[idx]), np.float32(self.mu_base[idx]), np.float32(self.std_base[idx])
+        s_static = self.S[idx].copy()
+        return (
+            x,
+            y,
+            int(self.sids[idx]),
+            np.float32(self.mu_base[idx]),
+            np.float32(self.std_base[idx]),
+            s_static,
+        )
 
 
 def _make_rocv_slices(
@@ -362,23 +374,23 @@ class PatchTSTTrainer(BaseModel):
             horizon = getattr(pp.windowizer, "H", DEFAULT_H)
             pp.windowizer.L = input_len
             pp.windowizer.H = horizon
-        X, Y, sids, dates = pp.build_patch_train(df_full)
+        X_dyn, S_stat, Y, sids, dates = pp.build_patch_train(df_full)
         # Guarantee channel index maps exist on the preprocessor
         if not hasattr(pp, "patch_dynamic_idx"):
             pp.patch_dynamic_idx = {}
         if not hasattr(pp, "patch_static_idx"):
             pp.patch_static_idx = {}
-        return X, Y, sids, dates
+        return X_dyn, S_stat, Y, sids, dates
 
     @staticmethod
     def build_eval_dataset(pp: Preprocessor, df_full: pd.DataFrame):
         """Build evaluation dataset for prediction."""
-        X, sids, dates = pp.build_patch_eval(df_full)
+        X_dyn, S_stat, sids, dates = pp.build_patch_eval(df_full)
         if not hasattr(pp, "patch_dynamic_idx"):
             pp.patch_dynamic_idx = {}
         if not hasattr(pp, "patch_static_idx"):
             pp.patch_static_idx = {}
-        return X, sids, dates
+        return X_dyn, S_stat, sids, dates
 
     def __init__(
         self,
@@ -403,8 +415,17 @@ class PatchTSTTrainer(BaseModel):
 
     def _ensure_torch(self):
         if not TORCH_OK: raise RuntimeError(f"PyTorch not available: {_TORCH_ERR}")
-    def train(self, X_train: np.ndarray, y_train: np.ndarray, series_ids: np.ndarray, label_dates: np.ndarray, cfg: TrainConfig,
-              preprocessors: Optional[List[Any]] = None, trial: Optional[optuna.Trial] = None) -> None:
+    def train(
+        self,
+        X_train: np.ndarray,
+        S_train: np.ndarray,
+        y_train: np.ndarray,
+        series_ids: np.ndarray,
+        label_dates: np.ndarray,
+        cfg: TrainConfig,
+        preprocessors: Optional[List[Any]] = None,
+        trial: Optional[optuna.Trial] = None,
+    ) -> None:
         """Train PatchTST models under various validation policies.
 
         Parameters
@@ -423,7 +444,9 @@ class PatchTSTTrainer(BaseModel):
         os.makedirs(self.model_dir, exist_ok=True)
         self.oof_records = []
         order = np.argsort(label_dates)
-        X_train = X_train[order]; y_train = y_train[order]
+        X_train = X_train[order]
+        S_train = S_train[order]
+        y_train = y_train[order]
         series_ids = np.array(series_ids)[order]
         label_dates = label_dates[order]
         if X_train.ndim == 3:
@@ -537,13 +560,19 @@ class PatchTSTTrainer(BaseModel):
             dyn_idx = getattr(pp, "patch_dynamic_idx", self.dynamic_idx_map)
             stat_idx = getattr(pp, "patch_static_idx", self.static_idx_map)
             tr_ds = _SeriesDataset(
-                X_train[tr_mask], y_train[tr_mask], series_idx[tr_mask],
+                X_train[tr_mask],
+                y_train[tr_mask],
+                S_train[tr_mask],
+                series_idx[tr_mask],
                 scaler=self.params.scaler,
                 dyn_idx=dyn_idx,
                 static_idx=stat_idx,
             )
             va_ds = _SeriesDataset(
-                X_train[va_mask], y_train[va_mask], series_idx[va_mask],
+                X_train[va_mask],
+                y_train[va_mask],
+                S_train[va_mask],
+                series_idx[va_mask],
                 scaler=self.params.scaler,
                 dyn_idx=dyn_idx,
                 static_idx=stat_idx,
@@ -583,12 +612,13 @@ class PatchTSTTrainer(BaseModel):
                 net.train()
                 nb_sum = clf_sum = s_sum = 0.0
                 batch_count = 0
-                for xb, yb, sb, mu_s, std_s in tr_loader:
+                for xb, yb, sb, mu_s, std_s, statb in tr_loader:
                     xb = xb.to(self.device, non_blocking=pin)
                     yb = yb.to(self.device, non_blocking=pin)
                     sb = sb.to(self.device, non_blocking=pin)
                     mu_s = mu_s.to(self.device, non_blocking=pin)
                     std_s = std_s.to(self.device, non_blocking=pin)
+                    statb = statb.to(self.device, non_blocking=pin)
                     opt.zero_grad()
                     p, mu_raw, kappa_raw = net(xb, sb)
                     mu = F.softplus(mu_raw) + 1e-6
@@ -636,12 +666,13 @@ class PatchTSTTrainer(BaseModel):
                 T = []
                 S = []
                 with torch.no_grad():
-                    for xb, yb, sb, mu_s, std_s in va_loader:
+                    for xb, yb, sb, mu_s, std_s, statb in va_loader:
                         xb = xb.to(self.device, non_blocking=pin)
                         yb = yb.to(self.device, non_blocking=pin)
                         sb = sb.to(self.device, non_blocking=pin)
                         mu_s = mu_s.to(self.device, non_blocking=pin)
                         std_s = std_s.to(self.device, non_blocking=pin)
+                        statb = statb.to(self.device, non_blocking=pin)
                         p, mu_raw, kappa_raw = net(xb, sb)
                         mu = F.softplus(mu_raw) + 1e-6
                         kappa = F.softplus(kappa_raw) + 1e-6
@@ -692,12 +723,13 @@ class PatchTSTTrainer(BaseModel):
             Y = []
             S = []
             with torch.no_grad():
-                for xb, yb, sb, mu_s, std_s in va_loader:
+                for xb, yb, sb, mu_s, std_s, statb in va_loader:
                     xb = xb.to(self.device, non_blocking=pin)
                     yb = yb.to(self.device, non_blocking=pin)
                     sb = sb.to(self.device, non_blocking=pin)
                     mu_s = mu_s.to(self.device, non_blocking=pin)
                     std_s = std_s.to(self.device, non_blocking=pin)
+                    statb = statb.to(self.device, non_blocking=pin)
                     p, mu_raw, kappa_raw = net(xb, sb)
                     mu = F.softplus(mu_raw) + 1e-6
                     kappa = F.softplus(kappa_raw) + 1e-6
@@ -729,6 +761,7 @@ class PatchTSTTrainer(BaseModel):
     def predict(
         self,
         X_eval: np.ndarray,
+        S_eval: np.ndarray,
         series_idx: Optional[Iterable[int]] = None,
         dyn_idx: Optional[Iterable[int]] = None,
         static_idx: Optional[Iterable[int]] = None,
@@ -741,6 +774,7 @@ class PatchTSTTrainer(BaseModel):
         ds = _SeriesDataset(
             X_eval,
             np.zeros((X_eval.shape[0], self.H), dtype=np.float32),
+            S_eval,
             series_idx,
             scaler=self.params.scaler,
             dyn_idx=dyn_idx or self.dynamic_idx_map,
@@ -756,11 +790,12 @@ class PatchTSTTrainer(BaseModel):
         )
         outs = []
         with torch.no_grad():
-            for xb, _, sb, mu_s, std_s in loader:
+            for xb, _, sb, mu_s, std_s, statb in loader:
                 xb = xb.to(self.device, non_blocking=pin)
                 sb = sb.to(self.device, non_blocking=pin)
                 mu_s = mu_s.to(self.device, non_blocking=pin)
                 std_s = std_s.to(self.device, non_blocking=pin)
+                statb = statb.to(self.device, non_blocking=pin)
                 preds = [m(xb, sb) for m in self.models]
                 p, mu_raw, kappa_raw = zip(*preds)
                 p = torch.stack(p)
@@ -777,10 +812,11 @@ class PatchTSTTrainer(BaseModel):
 
     def predict_df(self, eval_df):
         """Return conditional-mean prediction dataframe for PatchTST."""
-        X_eval, sids, _ = eval_df
+        X_eval, S_eval, sids, _ = eval_df
         sid_idx = np.array([self.id2idx.get(sid, 0) for sid in sids])
         y_pred = self.predict(
             X_eval,
+            S_eval,
             sid_idx,
             dyn_idx=self.dynamic_idx_map,
             static_idx=self.static_idx_map,

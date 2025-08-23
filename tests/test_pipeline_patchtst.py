@@ -28,17 +28,9 @@ def test_pipeline_patchtst(tmp_path):
 
     pt_path = workdir / "LGHackerton" / "models" / "patchtst" / "trainer.py"
     orig_pt = pt_path.read_text()
-    orig_pt = orig_pt.replace(
-        "X, Y, sids, dates = pp.build_patch_train(df_full)",
-        "X_dyn, X_stat, Y, sids, dates = pp.build_patch_train(df_full)\n        X = X_dyn",
-    )
-    orig_pt = orig_pt.replace(
-        "X, sids, dates = pp.build_patch_eval(df_full)",
-        "X_dyn, X_stat, sids, dates = pp.build_patch_eval(df_full)\n        X = X_dyn",
-    )
     stub = orig_pt + (
         "\n"
-        "def _train(self, X_train, y_train, series_ids, label_dates, cfg, preprocessors=None):\n"
+        "def _train(self, X_train, S_train, y_train, series_ids, label_dates, cfg, preprocessors=None):\n"
         "    import os\n"
         "    os.makedirs(self.model_dir, exist_ok=True)\n"
         "    open(os.path.join(self.model_dir, 'patchtst.pt'), 'wb').close()\n"
@@ -54,7 +46,7 @@ def test_pipeline_patchtst(tmp_path):
         "\n"
         "PatchTSTTrainer.load=lambda self, path: None\n"
         "\n"
-        "def _predict(self, X, sid_idx, dyn_idx=None, static_idx=None):\n"
+        "def _predict(self, X, S, sid_idx, dyn_idx=None, static_idx=None):\n"
         "    k = 1.0\n"
         "    eps = self.params.epsilon_leaky\n"
         "    import numpy as np\n"
