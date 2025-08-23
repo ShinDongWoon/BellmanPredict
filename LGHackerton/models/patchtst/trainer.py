@@ -326,8 +326,7 @@ if TORCH_OK:
 
         def forward(self, x, sid_idx=None, static_codes=None):
             B, L, C = x.shape
-            p = x.unfold(1, self.patch_len, self.stride)  # (B, n_patches, patch_len, C)
-            p = p.permute(0, 1, 3, 2).contiguous()  # (B, n_patches, C, patch_len)
+            p = x.unfold(1, self.patch_len, self.stride).contiguous()  # (B, n_patches, C, patch_len)
             z = self.proj(p)  # (B, n_patches, C, d_model)
             if self.id_embed is not None and sid_idx is not None:
                 e = self.id_embed(sid_idx)
