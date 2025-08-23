@@ -11,6 +11,7 @@ from .train import (
     trunc_nb_nll,
     focal_loss,
     combine_predictions,
+    combine_predictions_thresholded,
     weighted_smape_oof,
 )
 
@@ -20,5 +21,6 @@ __all__ = [
     "trunc_nb_nll",
     "focal_loss",
     "combine_predictions",
+    "combine_predictions_thresholded",
     "weighted_smape_oof",
 ]
