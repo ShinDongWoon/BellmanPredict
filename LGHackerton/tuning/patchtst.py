@@ -73,7 +73,7 @@ class PatchTSTSearchSpace:
 
     d_model: Tuple[int, ...] = (256, 384)
     n_heads: Tuple[int, ...] = (8, 16)
-    depth: Tuple[int, int] = (2, 3, 4)
+    depth: Tuple[int, int] = (2, 4)
     patch_len: Tuple[int, ...] = (7, 14)
     stride: Tuple[int, ...] = (7)
     dropout: Tuple[float, float] = (0.10, 0.30)
