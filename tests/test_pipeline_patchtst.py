@@ -28,6 +28,14 @@ def test_pipeline_patchtst(tmp_path):
 
     pt_path = workdir / "LGHackerton" / "models" / "patchtst" / "trainer.py"
     orig_pt = pt_path.read_text()
+    orig_pt = orig_pt.replace(
+        "X, Y, sids, dates = pp.build_patch_train(df_full)",
+        "X_dyn, X_stat, Y, sids, dates = pp.build_patch_train(df_full)\n        X = X_dyn",
+    )
+    orig_pt = orig_pt.replace(
+        "X, sids, dates = pp.build_patch_eval(df_full)",
+        "X_dyn, X_stat, sids, dates = pp.build_patch_eval(df_full)\n        X = X_dyn",
+    )
     stub = orig_pt + (
         "\n"
         "def _train(self, X_train, y_train, series_ids, label_dates, cfg, preprocessors=None):\n"
