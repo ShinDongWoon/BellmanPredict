@@ -720,9 +720,10 @@ class SampleWindowizer:
         Returns
         -------
         Tuple
-            ``(X, y, series_ids, label_dates, dynamic_idx, static_idx)``
-            where ``dynamic_idx`` and ``static_idx`` map column names to
-            channel indices in ``X``.
+            ``(X_dyn, X_stat, y, series_ids, label_dates, dynamic_idx, static_idx)``
+            where ``dynamic_idx`` maps dynamic column names to channel indices
+            in ``X_dyn`` and ``static_idx`` maps static column names to indices
+            in ``X_stat``.
         """
         if self.guard:
             self.guard.assert_scope({"train"})
@@ -736,9 +737,10 @@ class SampleWindowizer:
         if len(dynamic_cols) < 1:
             raise ValueError("no dynamic features: ensure 'sales_filled' exists")
         self.dynamic_idx = {c: i for i, c in enumerate(dynamic_cols)}
-        self.static_idx = {c: len(dynamic_cols) + i for i, c in enumerate(static_cols)}
+        # Static features are kept separate from dynamic channels
+        self.static_idx = {c: i for i, c in enumerate(static_cols)}
 
-        X_list, Y_list, S_list, D_list = [], [], [], []
+        X_dyn_list, X_stat_list, Y_list, S_list, D_list = [], [], [], [], []
         for sid, g in d.groupby(SERIES_COL, sort=False):
             g = g.reset_index(drop=True)
             # windows
@@ -749,28 +751,40 @@ class SampleWindowizer:
                 if np.any(np.isnan(y_vec)):
                     continue
                 if static_cols:
-                    stat_vals = g.loc[t, static_cols].values.astype(float)
-                    stat_block = np.repeat(stat_vals.reshape(1, -1), self.L, axis=0)
-                    x_window = np.concatenate([dyn_window, stat_block], axis=1)
+                    stat_vals = g.loc[t, static_cols].values.astype(np.int64)
                 else:
-                    x_window = dyn_window
-                X_list.append(x_window)
+                    stat_vals = np.empty((0,), dtype=np.int64)
+                X_dyn_list.append(dyn_window)
+                X_stat_list.append(stat_vals)
                 Y_list.append(y_vec)
                 S_list.append(sid)
                 D_list.append(g.loc[t + self.H, DATE_COL])
-        if not X_list:
+        if not X_dyn_list:
             raise RuntimeError("No PatchTST training windows produced.")
-        vprint(f"[PATCH/TRAIN] windows={len(X_list)}")
+        vprint(f"[PATCH/TRAIN] windows={len(X_dyn_list)}")
 
         dates = np.array(D_list, dtype="datetime64[ns]")
         sids = np.array(S_list, dtype=object)
         order = np.argsort(dates)
-        X_arr = np.stack(X_list, axis=0)[order]
+        X_dyn_arr = np.stack(X_dyn_list, axis=0)[order]
+        X_stat_arr = (
+            np.stack(X_stat_list, axis=0)[order]
+            if static_cols
+            else np.empty((len(X_dyn_arr), 0), dtype=np.int64)
+        )
         Y_arr = np.stack(Y_list, axis=0)[order]
         sids = sids[order]
         dates = dates[order]
 
-        return X_arr, Y_arr, sids, dates, self.dynamic_idx, self.static_idx
+        return (
+            X_dyn_arr,
+            X_stat_arr,
+            Y_arr,
+            sids,
+            dates,
+            self.dynamic_idx,
+            self.static_idx,
+        )
 
     def build_patch_eval(
             self,
@@ -790,9 +804,9 @@ class SampleWindowizer:
         if len(dynamic_cols) < 1:
             raise ValueError("no dynamic features: ensure 'sales_filled' exists")
         self.dynamic_idx = {c: i for i, c in enumerate(dynamic_cols)}
-        self.static_idx = {c: len(dynamic_cols) + i for i, c in enumerate(static_cols)}
+        self.static_idx = {c: i for i, c in enumerate(static_cols)}
 
-        X_list, S_list, D_list = [], [], []
+        X_dyn_list, X_stat_list, S_list, D_list = [], [], [], []
         for sid, g in d.groupby(SERIES_COL, sort=False):
             g = g.reset_index(drop=True)
             if len(g) < self.L:
@@ -800,21 +814,26 @@ class SampleWindowizer:
                 continue
             dyn_window = g.loc[len(g) - self.L: len(g) - 1, dynamic_cols].values.astype(float)
             if static_cols:
-                stat_vals = g.loc[len(g) - 1, static_cols].values.astype(float)
-                stat_block = np.repeat(stat_vals.reshape(1, -1), self.L, axis=0)
-                x_window = np.concatenate([dyn_window, stat_block], axis=1)
+                stat_vals = g.loc[len(g) - 1, static_cols].values.astype(np.int64)
             else:
-                x_window = dyn_window
-            X_list.append(x_window)
+                stat_vals = np.empty((0,), dtype=np.int64)
+            X_dyn_list.append(dyn_window)
+            X_stat_list.append(stat_vals)
             S_list.append(sid)
             D_list.append(g.loc[len(g) - 1, DATE_COL])
-        if not X_list:
+        if not X_dyn_list:
             raise RuntimeError("No PatchTST eval windows produced.")
-        vprint(f"[PATCH/EVAL] windows={len(X_list)}")
+        vprint(f"[PATCH/EVAL] windows={len(X_dyn_list)}")
 
         sids = np.array(S_list, dtype=object)
         dates = np.array(D_list, dtype="datetime64[ns]")
-        return np.stack(X_list, axis=0), sids, dates, self.dynamic_idx, self.static_idx
+        X_dyn_arr = np.stack(X_dyn_list, axis=0)
+        X_stat_arr = (
+            np.stack(X_stat_list, axis=0)
+            if static_cols
+            else np.empty((len(X_dyn_arr), 0), dtype=np.int64)
+        )
+        return X_dyn_arr, X_stat_arr, sids, dates, self.dynamic_idx, self.static_idx
 
 
 # ------------------------------
@@ -1023,23 +1042,27 @@ class Preprocessor:
             df_eval_full, self.feature_cols, show_progress=self.show_progress
         )
 
-    def build_patch_train(self, df_full: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def build_patch_train(
+        self, df_full: pd.DataFrame
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         self.guard.assert_scope({"train"})
-        X, Y, sids, dates, dyn_idx, stat_idx = self.windowizer.build_patch_train(
+        X_dyn, X_stat, Y, sids, dates, dyn_idx, stat_idx = self.windowizer.build_patch_train(
             df_full, self.patch_feature_cols, self.patch_static_feature_cols
         )
         self.patch_dynamic_idx = dyn_idx
         self.patch_static_idx = stat_idx
-        return X, Y, sids, dates
+        return X_dyn, X_stat, Y, sids, dates
 
-    def build_patch_eval(self, df_eval_full: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def build_patch_eval(
+        self, df_eval_full: pd.DataFrame
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         self.guard.assert_scope({"eval"})
-        X, sids, dates, dyn_idx, stat_idx = self.windowizer.build_patch_eval(
+        X_dyn, X_stat, sids, dates, dyn_idx, stat_idx = self.windowizer.build_patch_eval(
             df_eval_full, self.patch_feature_cols, self.patch_static_feature_cols
         )
         self.patch_dynamic_idx = dyn_idx
         self.patch_static_idx = stat_idx
-        return X, sids, dates
+        return X_dyn, X_stat, sids, dates
 
     # --------------------------
     # Artifacts I/O
