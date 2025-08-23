@@ -17,7 +17,10 @@ def _make_df(col_name: str, values):
 def test_single_model_identity():
     df = _make_df("yhat_patch", [1.0, 2.0])
     agg = aggregate_predictions([df])
-    expected = df.rename(columns={"yhat_patch": "yhat_ens"})[["series_id", "date", "yhat_ens"]]
+    expected = df.rename(columns={"yhat_patch": "yhat_ens"})[
+        ["series_id", "date", "yhat_ens"]
+    ]
+    expected["series_id"] = expected["series_id"].str.replace("::", "_", n=1)
     pd.testing.assert_frame_equal(agg.sort_index(axis=1), expected.sort_index(axis=1))
 
 

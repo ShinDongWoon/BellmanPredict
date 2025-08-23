@@ -23,6 +23,19 @@ def test_patchtst_validate_params(dummy_ctx):
     tuner = PatchTSTTuner(pp, df, cfg)
     params = PatchTSTParams()
     params_dict = params.__dict__.copy()
+    # Ensure parameters fall within the search space for fields not under test
+    s = tuner.search_space
+    stride_val = s.stride[0] if isinstance(s.stride, tuple) else s.stride
+    params_dict.update(
+        {
+            "d_model": s.d_model[0],
+            "n_heads": s.n_heads[0],
+            "patch_len": s.patch_len[0],
+            "stride": stride_val,
+            "id_embed_dim": s.id_embed_dim[0],
+            "batch_size": s.batch_size[0],
+        }
+    )
     params_missing = params_dict.copy()
     params_missing.pop("patch_len")
     with pytest.raises(TypeError, match="Missing field: patch_len"):
