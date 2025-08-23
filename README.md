@@ -86,4 +86,5 @@ consistent formatting and handle any missing or duplicate entries.
 - [Callbacks](docs/callbacks.md)
 - [Hyperparameter Tuning](docs/tuning.md)
 - [Model & Tuner Registries](docs/registry_tuner.md)
+- [PatchTST Model](docs/patchtst.md)
 
