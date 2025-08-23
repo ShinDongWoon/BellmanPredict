@@ -888,10 +888,6 @@ class Preprocessor:
     def _compute_patch_features(self, df: Optional[pd.DataFrame] = None):
         drop = {
             "is_priority_outlet",
-            "month_sin",
-            "month_cos",
-            "woy_sin",
-            "woy_cos",
             "is_promo",
             "zero_ratio_28",
             "days_since_last_sale",
