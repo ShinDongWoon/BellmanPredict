@@ -106,6 +106,11 @@ def aggregate_predictions(
     if np.isnan(merged["yhat_ens"]).any():
         logging.warning("Some predictions are missing after aggregation")
 
+    # Convert series ids to match the sample submission format before
+    # performing consistency checks against the sample file. The sample
+    # submission uses single underscores instead of the "::" separator.
+    merged.loc[:, "series_id"] = merged["series_id"].str.replace("::", "_", n=1)
+
     _missing_checks(merged)
 
     return merged
