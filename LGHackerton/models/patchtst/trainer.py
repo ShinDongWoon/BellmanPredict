@@ -310,6 +310,8 @@ if TORCH_OK:
             self.L, self.H = L, H
             self.patch_len = patch_len
             self.stride = stride
+            n_patches = 1 + (L - patch_len) // stride
+            self.pos_embed = nn.Parameter(torch.zeros(1, n_patches, 1, d_model))
             # project each channel's patch separately
             self.proj = nn.Linear(patch_len, d_model)
             self.blocks = nn.ModuleList([PatchTSTBlock(d_model, n_heads, dropout) for _ in range(depth)])
@@ -353,7 +355,7 @@ if TORCH_OK:
         def forward(self, x, sid_idx=None, static_codes=None):
             B, L, C = x.shape
             p = x.unfold(1, self.patch_len, self.stride).contiguous()  # (B, n_patches, C, patch_len)
-            z = self.proj(p)  # (B, n_patches, C, d_model)
+            z = self.proj(p) + self.pos_embed  # (B, n_patches, C, d_model)
             if self.id_embed is not None and sid_idx is not None:
                 e = self.id_embed(sid_idx)
                 if self.id_proj is not None:
@@ -1178,6 +1180,9 @@ class PatchTSTTrainer(BaseModel):
                 self.params.static_embed_dim,
                 self.params.channel_fusion,
             )
-            net.load_state_dict(torch.load(os.path.join(self.model_dir,fname), map_location=torch.device(self.device)))
+            net.load_state_dict(
+                torch.load(os.path.join(self.model_dir, fname), map_location=torch.device(self.device)),
+                strict=False,
+            )
             net.to(self.device)
             self.models.append(net)
