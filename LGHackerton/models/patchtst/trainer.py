@@ -714,6 +714,7 @@ class PatchTSTTrainer(BaseModel):
             opt = torch.optim.AdamW(net.parameters(), lr=self.params.lr, weight_decay=self.params.weight_decay)
             smape_loss = WeightedSMAPELoss(reduction="mean")
             best=float("inf"); best_state=None; bad=0
+            stop_training = False
             for ep in range(self.params.max_epochs):
                 curr_T = temperature_schedule(
                     ep,
@@ -781,6 +782,10 @@ class PatchTSTTrainer(BaseModel):
                         + self.params.lambda_s * L_s
                         + self.params.lambda_smooth * L_sm
                     )
+                    if not torch.isfinite(loss):
+                        warnings.warn("Non-finite loss; stopping training")
+                        stop_training = True
+                        break
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(net.parameters(), self.params.grad_clip)
                     opt.step()
@@ -794,6 +799,8 @@ class PatchTSTTrainer(BaseModel):
                     f"L_clf={clf_sum/batch_count:.4f} L_s={s_sum/batch_count:.4f} "
                     f"L_sm={sm_sum/batch_count:.4f}"
                 )
+                if stop_training:
+                    break
                 net.eval()
                 P = []
                 T = []
@@ -851,6 +858,9 @@ class PatchTSTTrainer(BaseModel):
                 )
                 s_val = smape(y_true.ravel(), y_pred.ravel(), eps)
                 mae_val = float(np.mean(np.abs(y_true - y_pred)))
+                if not np.isfinite(w_val):
+                    warnings.warn("Non-finite validation metric; treating as failure")
+                    w_val = float("inf")
                 if w_val + 1e-8 < best:
                     best = w_val; best_state = net.state_dict(); bad = 0
                 else:
