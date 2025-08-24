@@ -345,8 +345,9 @@ class PatchTSTTuner(HyperparameterTuner):
                 }
                 patch_len = params["patch_len"]
                 stride = params["stride"]
-                n_patches_eval = 1 + (28 - patch_len) // stride
+                n_patches_eval = 1 + (input_len - patch_len) // stride
                 if n_patches_eval < 8:
+                    # ensure at least 8 training patches
                     raise optuna.TrialPruned()
                 params["num_workers"] = PATCH_PARAMS.get("num_workers", 0)
                 if input_len % patch_len != 0:
