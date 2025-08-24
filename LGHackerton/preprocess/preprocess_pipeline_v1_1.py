@@ -614,6 +614,7 @@ class SampleWindowizer:
         self.L = lookback
         self.H = horizon
         self.guard = guard
+        # Indices of categorical features (none expected as raw `dow` is dropped)
         self.cat_indices: Dict[str, int] = {}
         # Channel indices for PatchTST tensors
         self.dynamic_idx: Dict[str, int] = {}
@@ -641,8 +642,8 @@ class SampleWindowizer:
         else:
             raise ValueError("Strict features required before building LGBM train set.")
 
-        # Track categorical feature indices (e.g., for embeddings)
-        self.cat_indices = {c: i for i, c in enumerate(feature_cols) if c == "dow"}
+        # Track categorical feature indices (currently none; `dow` removed earlier)
+        self.cat_indices = {}
 
         # --- Vectorised target generation -------------------------------------------------
         for h in range(1, self.H + 1):
@@ -687,8 +688,8 @@ class SampleWindowizer:
             self.guard.assert_scope({"eval"})
         d = df_eval.sort_values([SERIES_COL, DATE_COL]).copy()
 
-        # Track categorical feature indices (e.g., for embeddings)
-        self.cat_indices = {c: i for i, c in enumerate(feature_cols) if c == "dow"}
+        # Track categorical feature indices (currently none; `dow` removed earlier)
+        self.cat_indices = {}
         out_rows = []
         gb = d.groupby(SERIES_COL, sort=False)
         total = d[SERIES_COL].nunique()
@@ -866,6 +867,13 @@ class PreprocessorArtifacts:
 class Preprocessor:
     """
     High-level API to fit on train and transform eval with strict leakage control.
+
+    Notes
+    -----
+    When ``dow_mode`` is ``"cyclical"`` the raw integer day-of-week column is
+    retained until after :class:`RichLookupBuilder` so weekday statistics can be
+    computed. It is then dropped and only the cyclical sine/cosine features
+    remain.
     """
 
     def __init__(self, *, cyclical: bool = True, show_progress: bool = False):
@@ -950,6 +958,9 @@ class Preprocessor:
             return self.rich.transform(df)
 
         def _drop_dow(df: pd.DataFrame) -> pd.DataFrame:
+            # Remove raw day-of-week after RichLookupBuilder. It must remain
+            # available during lookup for weekday statistics but should not be
+            # part of downstream feature sets when using cyclical encoding.
             return (
                 df.drop(columns=["dow"], errors="ignore")
                 if self.calendar.dow_mode == "cyclical"
@@ -974,6 +985,8 @@ class Preprocessor:
         def _feature_cols(df: pd.DataFrame) -> pd.DataFrame:
             self.feature_cols = self._select_feature_columns(df)
             assert set(self.low_var_cols).isdisjoint(self.feature_cols)
+            if self.calendar.dow_mode == "cyclical":
+                assert "dow" not in self.feature_cols, "`dow` should be dropped post-rich lookup"
             gb = df.groupby(SERIES_COL)
             self.static_cols = [
                 c for c in self.feature_cols if gb[c].nunique().le(1).all()
@@ -1020,6 +1033,8 @@ class Preprocessor:
         self.guard.assert_scope({"eval"})
 
         def _drop_dow(df: pd.DataFrame) -> pd.DataFrame:
+            # Mirror the training pipeline: remove raw `dow` only after
+            # RichLookupBuilder has consumed it.
             return (
                 df.drop(columns=["dow"], errors="ignore")
                 if self.calendar.dow_mode == "cyclical"
