@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 import pytest
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from LGHackerton.preprocess.preprocess_pipeline_v1_1 import L
@@ -48,13 +49,15 @@ def test_pipeline_patchtst(tmp_path):
         "\n"
         "def _predict(self, X, S, sid_idx, dyn_idx=None, static_idx=None):\n"
         "    k = 1.0\n"
-        "    eps = self.params.epsilon_leaky\n"
         "    import numpy as np\n"
         "    mu = np.full((len(X), self.H), 2.0, dtype=float)\n"
-        "    prob = np.full((len(X), self.H), 0.5, dtype=float)\n"
+        "    logits = np.zeros((len(X), self.H), dtype=float)\n"
+        "    tau = self.params.tau\n"
+        "    b = np.log(tau / (1 - tau))\n"
+        "    gate = 1 / (1 + np.exp(-(logits - b) / 0.05))\n"
         "    p0 = np.power(k / (k + mu), k)\n"
         "    cond_mean = mu / np.maximum(1.0 - p0, 1e-6)\n"
-        "    return ((1 - eps) * prob + eps) * cond_mean\n"
+        "    return gate * cond_mean\n"
         "PatchTSTTrainer.predict=_predict\n"
     )
     pt_path.write_text(stub)
@@ -114,10 +117,12 @@ def test_pipeline_patchtst(tmp_path):
     assert pred_csv.exists()
     pred_df = pd.read_csv(pred_csv)
     kappa = 1.0
-    eps = 0.0
     mu = 2.0
-    prob = 0.5
+    tau = 0.5
+    logits = 0.0
     p0 = (kappa / (kappa + mu)) ** kappa
     cond_mean = mu / (1 - p0)
-    expected = ((1 - eps) * prob + eps) * cond_mean
+    b = np.log(tau / (1 - tau))
+    gate = 1 / (1 + np.exp(-(logits - b) / 0.05))
+    expected = gate * cond_mean
     assert pred_df["yhat_patch"].iloc[0] == pytest.approx(expected)

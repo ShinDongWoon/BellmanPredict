@@ -20,7 +20,18 @@ from LGHackerton.models.base_trainer import BaseModel, TrainConfig
 from LGHackerton.utils.metrics import smape, weighted_smape_np, PRIORITY_OUTLETS
 from LGHackerton.preprocess import Preprocessor, L as DEFAULT_L, H as DEFAULT_H
 from LGHackerton.preprocess.preprocess_pipeline_v1_1 import SALES_FILLED_COL
-from .train import trunc_nb_nll, focal_loss, WeightedSMAPELoss, combine_predictions
+from .train import (
+    trunc_nb_nll,
+    focal_loss,
+    WeightedSMAPELoss,
+    combine_predictions_thresholded,
+)
+
+
+def linear_anneal(epoch: int, max_epochs: int, min_value: float = 0.0) -> float:
+    """Linearly anneal from 1.0 towards ``min_value`` over ``max_epochs``."""
+    frac = float(epoch) / float(max_epochs)
+    return 1.0 - (1.0 - min_value) * frac
 
 @dataclass
 class PatchTSTParams:
@@ -73,12 +84,12 @@ class PatchTSTParams:
         Gamma parameter for focal loss.
     alpha : float
         Alpha parameter for focal loss.
-        epsilon_leaky : float
-            Small constant added for numerical stability in leaky operations.
-        scaler : str
-            Scaling strategy ("per_series" or "revin").
-        channel_fusion : str
-            Strategy to combine channel representations ("attention", "linear" or "mean").
+    tau : float
+        Threshold applied to the classifier probability for gating.
+    scaler : str
+        Scaling strategy ("per_series" or "revin").
+    channel_fusion : str
+        Strategy to combine channel representations ("attention", "linear" or "mean").
         val_policy : str
             Validation split policy.
     val_ratio : float
@@ -120,7 +131,7 @@ class PatchTSTParams:
     lambda_s: float = 0.05
     gamma: float = 2.0
     alpha: float = 0.5
-    epsilon_leaky: float = 0.0
+    tau: float = 0.5
     scaler: str = "per_series"
     channel_fusion: str = "attention"
     num_workers: int = 0
@@ -673,6 +684,7 @@ class PatchTSTTrainer(BaseModel):
             smape_loss = WeightedSMAPELoss(reduction="mean")
             best=float("inf"); best_state=None; bad=0
             for ep in range(self.params.max_epochs):
+                curr_T = max(linear_anneal(ep, self.params.max_epochs, 0.05), 0.05)
                 net.train()
                 nb_sum = clf_sum = s_sum = 0.0
                 batch_count = 0
@@ -707,9 +719,13 @@ class PatchTSTTrainer(BaseModel):
                     nb_loss = trunc_nb_nll(y_raw, mu_unscaled, kappa)
                     L_nb = (nb_loss * w * z).sum() / torch.clamp(z.sum(), min=1.0)
                     L_clf = focal_loss(prob, z, self.params.gamma, self.params.alpha, w)
-                    P0 = torch.pow(kappa / (kappa + mu_unscaled), kappa)
-                    cond_mean = mu_unscaled / torch.clamp(1.0 - P0, min=1e-6)
-                    y_hat = ((1 - self.params.epsilon_leaky) * prob + self.params.epsilon_leaky) * cond_mean
+                    y_hat = combine_predictions_thresholded(
+                        logits=logits,
+                        mu=mu_unscaled,
+                        kappa=kappa,
+                        tau=self.params.tau,
+                        temperature=curr_T,
+                    )
                     L_s = smape_loss(y_hat, y_raw, w)
                     loss = (
                         self.params.lambda_nb * L_nb
@@ -739,15 +755,25 @@ class PatchTSTTrainer(BaseModel):
                         std_s = std_s.to(self.device, non_blocking=pin)
                         static_codes = static_codes.to(self.device, non_blocking=pin)
                         logits, mu_raw, kappa_raw = net(xb, sb, static_codes)
-                        prob = torch.sigmoid(logits)
                         mu = F.softplus(mu_raw) + 1e-6
                         kappa = F.softplus(kappa_raw) + 1e-6
                         mu_unscaled = mu
                         if self.params.scaler == "revin":
                             mu_unscaled = mu * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
                             yb = yb * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
-                        final = combine_predictions(
-                            prob, mu_unscaled, kappa, self.params.epsilon_leaky
+                        _ = combine_predictions_thresholded(
+                            logits=logits,
+                            mu=mu_unscaled,
+                            kappa=kappa,
+                            tau=self.params.tau,
+                            temperature=curr_T,
+                        )
+                        final = combine_predictions_thresholded(
+                            logits=logits,
+                            mu=mu_unscaled,
+                            kappa=kappa,
+                            tau=self.params.tau,
+                            temperature=None,
                         )
                         P.append(final.cpu().numpy())
                         T.append(yb.cpu().numpy())
@@ -797,15 +823,25 @@ class PatchTSTTrainer(BaseModel):
                     std_s = std_s.to(self.device, non_blocking=pin)
                     static_codes = static_codes.to(self.device, non_blocking=pin)
                     logits, mu_raw, kappa_raw = net(xb, sb, static_codes)
-                    prob = torch.sigmoid(logits)
                     mu = F.softplus(mu_raw) + 1e-6
                     kappa = F.softplus(kappa_raw) + 1e-6
                     mu_unscaled = mu
                     if self.params.scaler == "revin":
                         mu_unscaled = mu * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
                         yb = yb * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
-                    final = combine_predictions(
-                        prob, mu_unscaled, kappa, self.params.epsilon_leaky
+                    _ = combine_predictions_thresholded(
+                        logits=logits,
+                        mu=mu_unscaled,
+                        kappa=kappa,
+                        tau=self.params.tau,
+                        temperature=curr_T,
+                    )
+                    final = combine_predictions_thresholded(
+                        logits=logits,
+                        mu=mu_unscaled,
+                        kappa=kappa,
+                        tau=self.params.tau,
+                        temperature=None,
                     )
                     final = final.cpu()
                     P.append(final.numpy())
@@ -865,13 +901,18 @@ class PatchTSTTrainer(BaseModel):
                 static_codes = static_codes.to(self.device, non_blocking=pin)
                 preds = [m(xb, sb, static_codes) for m in self.models]
                 logits, mu_raw, kappa_raw = zip(*preds)
-                prob = torch.sigmoid(torch.stack(logits))
+                logits = torch.stack(logits)
                 mu = torch.stack([F.softplus(m) + 1e-6 for m in mu_raw])
                 kappa = torch.stack([F.softplus(k) + 1e-6 for k in kappa_raw])
                 if self.params.scaler == "revin":
                     mu = mu * std_s.view(1, -1, 1) + mu_s.view(1, -1, 1)
-                out = combine_predictions(
-                    prob, mu, kappa, self.params.epsilon_leaky
+                curr_T = 0.05
+                out = combine_predictions_thresholded(
+                    logits=logits,
+                    mu=mu,
+                    kappa=kappa,
+                    tau=self.params.tau,
+                    temperature=curr_T,
                 ).mean(0)
                 outs.append(out.cpu().numpy())
         yhat = np.clip(np.concatenate(outs, 0), 0, None)
