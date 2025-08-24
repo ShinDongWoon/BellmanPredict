@@ -23,6 +23,7 @@ from LGHackerton.preprocess.preprocess_pipeline_v1_1 import SALES_FILLED_COL
 from .train import (
     trunc_nb_nll,
     hurdle_nll,
+    hurdle_focal_nll,
     WeightedSMAPELoss,
     combine_predictions_thresholded,
 )
@@ -167,6 +168,9 @@ class PatchTSTParams:
     rocv_val_span_days: int = 7
     purge_days: int = 0
     min_val_samples: int = 28
+    use_focal: bool = True
+    focal_gamma: float = 1.5
+    focal_alpha: float = 0.5
 
 class _SeriesDataset(Dataset):
     def __init__(
@@ -723,6 +727,7 @@ class PatchTSTTrainer(BaseModel):
                     self.params.temp_end,
                     self.params.temp_anneal_epochs,
                 )
+                curr_gamma = self.params.focal_gamma * min(1.0, ep / 5.0)
                 net.train()
                 nb_sum = clf_sum = s_sum = sm_sum = 0.0
                 batch_count = 0
@@ -765,7 +770,16 @@ class PatchTSTTrainer(BaseModel):
                             kappa[M],
                         )
                     L_nb = (nb_loss * w * z).sum() / torch.clamp(z.sum(), min=1.0)
-                    L_clf = hurdle_nll(logits, z, w)
+                    if self.params.use_focal:
+                        L_clf = 1.2 * hurdle_focal_nll(
+                            logits,
+                            z,
+                            w,
+                            gamma=curr_gamma,
+                            alpha_pos=self.params.focal_alpha,
+                        )
+                    else:
+                        L_clf = hurdle_nll(logits, z, w)
                     y_hat = combine_predictions_thresholded(
                         logits=logits,
                         mu=mu_count,

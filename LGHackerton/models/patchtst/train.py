@@ -20,6 +20,7 @@ from typing import Optional
 import torch
 from torch import Tensor
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class WeightedSMAPELoss(nn.Module):
@@ -183,6 +184,63 @@ def hurdle_nll(logits: Tensor, z: Tensor, w: Optional[Tensor] = None) -> Tensor:
     p0 = torch.sigmoid(-logits)
     p0 = torch.clamp(p0, min=1e-8, max=1 - 1e-8)
     loss = z * -torch.log1p(-p0) + (1 - z) * -torch.log(p0)
+    if w is not None:
+        loss = loss * w
+    return loss.mean()
+
+
+def hurdle_focal_nll(
+    logits: Tensor,
+    z: Tensor,
+    w: Optional[Tensor] = None,
+    *,
+    gamma: float = 2.0,
+    alpha_pos: float = 0.5,
+    eps: float = 1e-8,
+) -> Tensor:
+    """Numerically stable focal variant of :func:`hurdle_nll`.
+
+    The loss emphasises misclassified examples by scaling the standard
+    binary cross-entropy with a factor ``(1 - p_t)^gamma`` where ``p_t`` is
+    the model probability of the true class.  ``alpha_pos`` controls the
+    relative weighting of positive vs. negative samples.
+
+    Parameters
+    ----------
+    logits:
+        Classifier logits.
+    z:
+        Ground truth indicators ``{0,1}``.
+    w:
+        Optional per-sample weights.
+    gamma:
+        Focusing parameter.  ``gamma=0`` reduces the loss to a weighted
+        binary cross-entropy.
+    alpha_pos:
+        Weight applied to positive samples.  Negative samples receive
+        ``1 - alpha_pos``.
+    eps:
+        Small value to avoid numerical issues when ``p_t`` is very close to
+        ``1``.
+    """
+
+    log_p = F.logsigmoid(logits)
+    log_q = F.logsigmoid(-logits)
+    p = torch.exp(log_p)
+    q = torch.exp(log_q)
+
+    pt = torch.where(z > 0, p, q)
+    log_pt = torch.where(z > 0, log_p, log_q)
+
+    focal = torch.exp(gamma * torch.log(torch.clamp(1.0 - pt, min=eps)))
+
+    alpha_t = torch.where(
+        z > 0,
+        torch.tensor(alpha_pos, device=logits.device, dtype=logits.dtype),
+        torch.tensor(1.0 - alpha_pos, device=logits.device, dtype=logits.dtype),
+    )
+
+    loss = -alpha_t * focal * log_pt
     if w is not None:
         loss = loss * w
     return loss.mean()

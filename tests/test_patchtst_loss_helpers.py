@@ -11,6 +11,7 @@ from LGHackerton.models.patchtst import (
     combine_predictions,
     combine_predictions_thresholded,
     hurdle_nll,
+    hurdle_focal_nll,
     trunc_nb_nll,
     weighted_smape_oof,
     weighted_smape_oof_thresholded,
@@ -63,11 +64,24 @@ def test_hurdle_nll_matches_bce_with_logits():
     assert torch.allclose(actual, expected)
 
 
+def test_hurdle_focal_nll_gamma_zero_scales_bce():
+    """With ``gamma=0`` the focal loss reduces to a scaled BCE."""
+    logits = torch.tensor([0.2, -0.3])
+    targets = torch.tensor([1.0, 0.0])
+    w = torch.tensor([1.0, 2.0])
+    expected = 0.5 * torch.nn.functional.binary_cross_entropy_with_logits(
+        logits, targets, weight=w
+    )
+    actual = hurdle_focal_nll(logits, targets, w, gamma=0.0, alpha_pos=0.5)
+    assert torch.allclose(actual, expected)
+
+
 def test_patchtst_exports_loss_helpers():
     """The patchtst package should expose utility functions for external use."""
     for fn in (
         trunc_nb_nll,
         hurdle_nll,
+        hurdle_focal_nll,
         combine_predictions,
         combine_predictions_thresholded,
         weighted_smape_oof,
