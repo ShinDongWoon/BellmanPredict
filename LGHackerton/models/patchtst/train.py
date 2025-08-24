@@ -246,6 +246,72 @@ def combine_predictions(
     return ((1 - epsilon) * p + epsilon) * cond_mean
 
 
+def combine_predictions_thresholded(
+    p: Optional[Tensor] = None,
+    logits: Optional[Tensor] = None,
+    mu: Tensor | None = None,
+    kappa: Tensor | None = None,
+    tau: float = 0.5,
+    temperature: Optional[float] = None,
+) -> Tensor:
+    """Combine predictions using a thresholded gate.
+
+    The conditional mean is computed in the same way as in
+    :func:`combine_predictions`.  The classifier output is converted into a
+    gating value according to ``tau`` and ``temperature``:
+
+    - If ``temperature`` is ``None`` a hard gate is applied using the
+      probabilities ``p`` as ``gate = (p >= tau)``.
+    - Otherwise the provided ``logits`` are transformed using
+      ``sigmoid((logits - b) / temperature)`` where ``b`` is the logit of
+      ``tau``.
+
+    Parameters
+    ----------
+    p, logits:
+        Probability or logit outputs from the classifier.  Exactly one of
+        these must be provided depending on ``temperature``.
+    mu:
+        Regression model predictions corresponding to the unconditional mean
+        ``mu_u``.
+    kappa:
+        Shape parameter controlling the zero probability ``P0``.
+    tau:
+        Threshold applied to the classifier output.
+    temperature:
+        Temperature for the soft gate.  If ``None`` a hard gate is used.
+    """
+
+    if mu is None or kappa is None:
+        raise ValueError("mu and kappa must be provided")
+
+    dtype = mu.dtype
+    if p is not None:
+        dtype = p.dtype
+    elif logits is not None:
+        dtype = logits.dtype
+    mu = mu.to(dtype)
+    device = mu.device
+    kappa_t = torch.clamp(torch.as_tensor(kappa, dtype=dtype, device=device), min=1e-8)
+
+    # Compute conditional mean with numerical safeguards
+    p0 = torch.pow(kappa_t / (kappa_t + mu), kappa_t)
+    cond_mean = mu / torch.clamp(1.0 - p0, min=1e-6)
+
+    if temperature is None:
+        if p is None:
+            raise ValueError("p must be provided when temperature is None")
+        gate = (p >= tau).to(mu.dtype)
+    else:
+        if logits is None:
+            raise ValueError("logits must be provided when temperature is not None")
+        logits = logits.to(mu.dtype)
+        b = torch.logit(torch.tensor(tau, dtype=mu.dtype, device=device))
+        gate = torch.sigmoid((logits - b) / temperature)
+
+    return gate * cond_mean
+
+
 def weighted_smape_oof(
     y_true: Tensor,
     clf_prob: Tensor,
@@ -272,6 +338,30 @@ def weighted_smape_oof(
         Optional sample weights.
     """
     final_pred = combine_predictions(clf_prob, mu, kappa, epsilon_leaky)
+    loss_fn = WeightedSMAPELoss(reduction="mean")
+    return loss_fn(final_pred, y_true, w=w)
+
+
+def weighted_smape_oof_thresholded(
+    y_true: Tensor,
+    p: Optional[Tensor] = None,
+    logits: Optional[Tensor] = None,
+    mu: Tensor | None = None,
+    kappa: Tensor | None = None,
+    tau: float = 0.5,
+    temperature: Optional[float] = None,
+    w: Optional[Tensor] = None,
+) -> Tensor:
+    """Compute weighted sMAPE for thresholded combined predictions."""
+
+    final_pred = combine_predictions_thresholded(
+        p=p,
+        logits=logits,
+        mu=mu,
+        kappa=kappa,
+        tau=tau,
+        temperature=temperature,
+    )
     loss_fn = WeightedSMAPELoss(reduction="mean")
     return loss_fn(final_pred, y_true, w=w)
 
