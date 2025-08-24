@@ -326,7 +326,6 @@ class CalendarFeatureMaker:
         if self.dow_mode == "cyclical":
             d["dow_sin"] = np.sin(2 * np.pi * d["dow"] / 7)
             d["dow_cos"] = np.cos(2 * np.pi * d["dow"] / 7)
-            d.drop(columns=["dow"], inplace=True)
 
         # base calendar categories
         if self.cyclical:

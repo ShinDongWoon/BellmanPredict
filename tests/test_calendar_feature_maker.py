@@ -72,7 +72,7 @@ def test_dow_modes(mode):
     out = CalendarFeatureMaker(dow_mode=mode).fit(df).transform(df)
     assert "day" not in out.columns
     if mode == "cyclical":
-        assert "dow" not in out.columns
+        assert "dow" in out.columns
         assert {"dow_sin", "dow_cos"}.issubset(out.columns)
     else:
         assert "dow" in out.columns
