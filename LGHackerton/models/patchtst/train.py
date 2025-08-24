@@ -140,6 +140,8 @@ def trunc_nb_nll(y: Tensor, mu: Tensor, kappa: Tensor) -> Tensor:
     """
 
     y = y.to(mu.dtype)
+    if (y <= 0).any():
+        raise ValueError("trunc_nb_nll requires y > 0")
     kappa = torch.clamp(
         torch.as_tensor(kappa, dtype=mu.dtype, device=mu.device), min=1e-8
     )
