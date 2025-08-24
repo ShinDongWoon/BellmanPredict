@@ -75,11 +75,10 @@ def test_dow_modes(mode):
     out = CalendarFeatureMaker(dow_mode=mode).fit(df).transform(df)
     assert "day" not in out.columns
     if mode == "cyclical":
-        assert "dow" in out.columns
-        assert {"dow_sin", "dow_cos"}.issubset(out.columns)
+        assert {"dow", "dow_sin", "dow_cos"}.issubset(out.columns)
     else:
         assert "dow" in out.columns
-        assert "dow_sin" not in out.columns and "dow_cos" not in out.columns
+        assert {"dow_sin", "dow_cos"}.isdisjoint(out.columns)
 
 
 def test_dow_cyclical_features_values():
@@ -131,7 +130,7 @@ def test_preprocessor_cyclical_option_controls_dummies():
     assert dummy(out_dum.columns)
 
 
-def test_preprocessor_drops_dow_when_cyclical():
+def test_preprocessor_dow_effect_and_drops_dow_when_cyclical():
     df = pd.DataFrame(
         {
             RAW_DATE: pd.to_datetime(
@@ -143,7 +142,9 @@ def test_preprocessor_drops_dow_when_cyclical():
     )
     pp = Preprocessor()
     out = pp.fit_transform_train(df)
+    assert "dow_effect" in out.columns
     assert "dow" not in out.columns
+    assert "dow_effect" in pp.feature_cols
     assert "dow" not in pp.feature_cols
 
 
