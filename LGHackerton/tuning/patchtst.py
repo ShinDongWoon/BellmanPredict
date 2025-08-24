@@ -234,7 +234,7 @@ class PatchTSTTuner(HyperparameterTuner):
                 else 0.0,
             )
 
-        pruner = PatientPruner(MedianPruner(n_warmup_steps=5), patience=2)
+        pruner = PatientPruner(MedianPruner(n_warmup_steps=12), patience=4)
         study = optuna.create_study(
             direction="minimize", sampler=sampler, pruner=pruner
         )
