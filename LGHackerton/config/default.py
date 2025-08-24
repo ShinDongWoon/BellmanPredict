@@ -41,7 +41,7 @@ PATCH_PARAMS = dict(
     id_embed_dim=16,
     lr=1e-3, weight_decay=1e-4, batch_size=256,
     max_epochs=200, patience=20,
-    lambda_nb=1.0, lambda_s=0.05,
+    lambda_nb=1.0, lambda_s=0.05, lambda_smooth=0.0,
     tau=0.5,
     num_workers=0,
 )
