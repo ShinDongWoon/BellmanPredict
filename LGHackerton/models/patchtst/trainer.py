@@ -302,7 +302,7 @@ if TORCH_OK:
                 nn.Linear(d_model, d_model), nn.GELU(), nn.Linear(d_model, 2 * H)
             )
             self.clf_head = nn.Sequential(
-                nn.Linear(d_model, d_model), nn.GELU(), nn.Linear(d_model, H), nn.Sigmoid()
+                nn.Linear(d_model, d_model), nn.GELU(), nn.Linear(d_model, H)
             )
             if id_embed_dim > 0 and num_series > 0:
                 self.id_embed = nn.Embedding(num_series, id_embed_dim)
@@ -358,8 +358,8 @@ if TORCH_OK:
                 z = z.mean(dim=1)
             params = self.reg_head(z)
             mu_raw, kappa_raw = params.chunk(2, dim=-1)
-            p_clf = self.clf_head(z)
-            return p_clf, mu_raw, kappa_raw
+            logits = self.clf_head(z)
+            return logits, mu_raw, kappa_raw
 
 class PatchTSTTrainer(BaseModel):
     """Trainer for PatchTST models.
@@ -684,7 +684,8 @@ class PatchTSTTrainer(BaseModel):
                     std_s = std_s.to(self.device, non_blocking=pin)
                     static_codes = static_codes.to(self.device, non_blocking=pin)
                     opt.zero_grad()
-                    p, mu_raw, kappa_raw = net(xb, sb, static_codes)
+                    logits, mu_raw, kappa_raw = net(xb, sb, static_codes)
+                    prob = torch.sigmoid(logits)
                     mu = F.softplus(mu_raw) + 1e-6
                     kappa = F.softplus(kappa_raw) + 1e-6
                     y_raw = yb
@@ -705,10 +706,10 @@ class PatchTSTTrainer(BaseModel):
                         w = w * priority_w
                     nb_loss = trunc_nb_nll(y_raw, mu_unscaled, kappa)
                     L_nb = (nb_loss * w * z).sum() / torch.clamp(z.sum(), min=1.0)
-                    L_clf = focal_loss(p, z, self.params.gamma, self.params.alpha, w)
+                    L_clf = focal_loss(prob, z, self.params.gamma, self.params.alpha, w)
                     P0 = torch.pow(kappa / (kappa + mu_unscaled), kappa)
                     cond_mean = mu_unscaled / torch.clamp(1.0 - P0, min=1e-6)
-                    y_hat = ((1 - self.params.epsilon_leaky) * p + self.params.epsilon_leaky) * cond_mean
+                    y_hat = ((1 - self.params.epsilon_leaky) * prob + self.params.epsilon_leaky) * cond_mean
                     L_s = smape_loss(y_hat, y_raw, w)
                     loss = (
                         self.params.lambda_nb * L_nb
@@ -737,7 +738,8 @@ class PatchTSTTrainer(BaseModel):
                         mu_s = mu_s.to(self.device, non_blocking=pin)
                         std_s = std_s.to(self.device, non_blocking=pin)
                         static_codes = static_codes.to(self.device, non_blocking=pin)
-                        p, mu_raw, kappa_raw = net(xb, sb, static_codes)
+                        logits, mu_raw, kappa_raw = net(xb, sb, static_codes)
+                        prob = torch.sigmoid(logits)
                         mu = F.softplus(mu_raw) + 1e-6
                         kappa = F.softplus(kappa_raw) + 1e-6
                         mu_unscaled = mu
@@ -745,7 +747,7 @@ class PatchTSTTrainer(BaseModel):
                             mu_unscaled = mu * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
                             yb = yb * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
                         final = combine_predictions(
-                            p, mu_unscaled, kappa, self.params.epsilon_leaky
+                            prob, mu_unscaled, kappa, self.params.epsilon_leaky
                         )
                         P.append(final.cpu().numpy())
                         T.append(yb.cpu().numpy())
@@ -794,7 +796,8 @@ class PatchTSTTrainer(BaseModel):
                     mu_s = mu_s.to(self.device, non_blocking=pin)
                     std_s = std_s.to(self.device, non_blocking=pin)
                     static_codes = static_codes.to(self.device, non_blocking=pin)
-                    p, mu_raw, kappa_raw = net(xb, sb, static_codes)
+                    logits, mu_raw, kappa_raw = net(xb, sb, static_codes)
+                    prob = torch.sigmoid(logits)
                     mu = F.softplus(mu_raw) + 1e-6
                     kappa = F.softplus(kappa_raw) + 1e-6
                     mu_unscaled = mu
@@ -802,7 +805,7 @@ class PatchTSTTrainer(BaseModel):
                         mu_unscaled = mu * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
                         yb = yb * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
                     final = combine_predictions(
-                        p, mu_unscaled, kappa, self.params.epsilon_leaky
+                        prob, mu_unscaled, kappa, self.params.epsilon_leaky
                     )
                     final = final.cpu()
                     P.append(final.numpy())
@@ -861,14 +864,14 @@ class PatchTSTTrainer(BaseModel):
                 std_s = std_s.to(self.device, non_blocking=pin)
                 static_codes = static_codes.to(self.device, non_blocking=pin)
                 preds = [m(xb, sb, static_codes) for m in self.models]
-                p, mu_raw, kappa_raw = zip(*preds)
-                p = torch.stack(p)
+                logits, mu_raw, kappa_raw = zip(*preds)
+                prob = torch.sigmoid(torch.stack(logits))
                 mu = torch.stack([F.softplus(m) + 1e-6 for m in mu_raw])
                 kappa = torch.stack([F.softplus(k) + 1e-6 for k in kappa_raw])
                 if self.params.scaler == "revin":
                     mu = mu * std_s.view(1, -1, 1) + mu_s.view(1, -1, 1)
                 out = combine_predictions(
-                    p, mu, kappa, self.params.epsilon_leaky
+                    prob, mu, kappa, self.params.epsilon_leaky
                 ).mean(0)
                 outs.append(out.cpu().numpy())
         yhat = np.clip(np.concatenate(outs, 0), 0, None)

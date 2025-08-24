@@ -23,7 +23,8 @@ net = PatchTSTTrainer.PatchTSTNet(
 )
 
 x = torch.randn(4, 96, 5)  # (B, L, C)
-p_clf, mu_raw, kappa_raw = net(x)
+logits, mu_raw, kappa_raw = net(x)
+prob = torch.sigmoid(logits)
 ```
 
 Each channel is patched and projected separately; the resulting embeddings are fused
