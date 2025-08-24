@@ -38,5 +38,5 @@ def test_series_dataset_returns_static_codes():
     y = np.zeros((2,), dtype=np.float32)
     S = np.array([[1, 2], [3, 4]], dtype=np.int64)
     ds = _SeriesDataset(X, y, S, dyn_idx=[0])
-    _, _, _, _, _, s = ds[1]
+    _, _, _, _, _, s, _ = ds[1]
     assert np.array_equal(s, S[1])

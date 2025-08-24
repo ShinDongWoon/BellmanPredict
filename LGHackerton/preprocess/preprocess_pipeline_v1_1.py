@@ -483,6 +483,10 @@ class StrictFeatureMaker:
         d["zero_ratio_28"] = gb[SALES_FILLED_COL].apply(
             lambda s: (s == 0).astype(np.int8).rolling(28, min_periods=1).mean()
         ).reset_index(level=0, drop=True)
+        # Longer-horizon intermittency summaries
+        d["zero_ratio_84"] = gb[SALES_FILLED_COL].apply(
+            lambda s: (s == 0).astype(np.int8).rolling(84, min_periods=1).mean()
+        ).reset_index(level=0, drop=True)
 
         # days_since_last_sale
         def days_since_last_sale(arr: np.ndarray) -> np.ndarray:
@@ -513,6 +517,9 @@ class StrictFeatureMaker:
 
         d["zero_run_len"] = gb[SALES_FILLED_COL].transform(
             lambda s: pd.Series(zero_run_len(s.values), index=s.index)
+        )
+        d["zero_run_max_84"] = gb["zero_run_len"].transform(
+            lambda s: s.rolling(84, min_periods=1).max()
         )
         vprint(f"[Strict] rolling+intermittency done  rows={len(d)}")
 
@@ -722,7 +729,8 @@ class SampleWindowizer:
             df: pd.DataFrame,
             feature_cols: List[str],
             static_cols: List[str],
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, int], Dict[str, int]]:
+            summary_cols: List[str] | None = None,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, int], Dict[str, int]]:
         """Build PatchTST training windows with identifiers.
 
         Returns
@@ -748,7 +756,8 @@ class SampleWindowizer:
         # Static features are kept separate from dynamic channels
         self.static_idx = {c: i for i, c in enumerate(static_cols)}
 
-        X_dyn_list, X_stat_list, Y_list, S_list, D_list = [], [], [], [], []
+        summary_cols = summary_cols or []
+        X_dyn_list, X_stat_list, X_sum_list, Y_list, S_list, D_list = [], [], [], [], [], []
         for sid, g in d.groupby(SERIES_COL, sort=False):
             g = g.reset_index(drop=True)
             # windows
@@ -763,8 +772,13 @@ class SampleWindowizer:
                     stat_vals = np.clip(stat_vals + 1, 0, None)
                 else:
                     stat_vals = np.empty((0,), dtype=np.int64)
+                if summary_cols:
+                    sum_vals = g.loc[t, summary_cols].values.astype(float)
+                else:
+                    sum_vals = np.empty((0,), dtype=float)
                 X_dyn_list.append(dyn_window)
                 X_stat_list.append(stat_vals)
+                X_sum_list.append(sum_vals)
                 Y_list.append(y_vec)
                 S_list.append(sid)
                 D_list.append(g.loc[t + self.H, DATE_COL])
@@ -781,6 +795,11 @@ class SampleWindowizer:
             if static_cols
             else np.empty((len(X_dyn_arr), 0), dtype=np.int64)
         )
+        X_sum_arr = (
+            np.stack(X_sum_list, axis=0)[order]
+            if summary_cols
+            else np.empty((len(X_dyn_arr), 0), dtype=float)
+        )
         Y_arr = np.stack(Y_list, axis=0)[order]
         sids = sids[order]
         dates = dates[order]
@@ -788,6 +807,7 @@ class SampleWindowizer:
         return (
             X_dyn_arr,
             X_stat_arr,
+            X_sum_arr,
             Y_arr,
             sids,
             dates,
@@ -800,7 +820,8 @@ class SampleWindowizer:
             df_eval: pd.DataFrame,
             feature_cols: List[str],
             static_cols: List[str],
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, int], Dict[str, int]]:
+            summary_cols: List[str] | None = None,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, int], Dict[str, int]]:
         if self.guard:
             self.guard.assert_scope({"eval"})
         d = df_eval.sort_values([SERIES_COL, DATE_COL]).copy()
@@ -815,7 +836,8 @@ class SampleWindowizer:
         self.dynamic_idx = {c: i for i, c in enumerate(dynamic_cols)}
         self.static_idx = {c: i for i, c in enumerate(static_cols)}
 
-        X_dyn_list, X_stat_list, S_list, D_list = [], [], [], []
+        summary_cols = summary_cols or []
+        X_dyn_list, X_stat_list, X_sum_list, S_list, D_list = [], [], [], [], []
         for sid, g in d.groupby(SERIES_COL, sort=False):
             g = g.reset_index(drop=True)
             if len(g) < self.L:
@@ -827,8 +849,13 @@ class SampleWindowizer:
                 stat_vals = np.clip(stat_vals + 1, 0, None)
             else:
                 stat_vals = np.empty((0,), dtype=np.int64)
+            if summary_cols:
+                sum_vals = g.loc[len(g) - 1, summary_cols].values.astype(float)
+            else:
+                sum_vals = np.empty((0,), dtype=float)
             X_dyn_list.append(dyn_window)
             X_stat_list.append(stat_vals)
+            X_sum_list.append(sum_vals)
             S_list.append(sid)
             D_list.append(g.loc[len(g) - 1, DATE_COL])
         if not X_dyn_list:
@@ -843,7 +870,20 @@ class SampleWindowizer:
             if static_cols
             else np.empty((len(X_dyn_arr), 0), dtype=np.int64)
         )
-        return X_dyn_arr, X_stat_arr, sids, dates, self.dynamic_idx, self.static_idx
+        X_sum_arr = (
+            np.stack(X_sum_list, axis=0)
+            if summary_cols
+            else np.empty((len(X_dyn_arr), 0), dtype=float)
+        )
+        return (
+            X_dyn_arr,
+            X_stat_arr,
+            X_sum_arr,
+            sids,
+            dates,
+            self.dynamic_idx,
+            self.static_idx,
+        )
 
 
 # ------------------------------
@@ -862,6 +902,7 @@ class PreprocessorArtifacts:
     static_cols: List[str]
     static_feature_cols: List[str]
     dynamic_feature_cols: List[str]
+    summary_feature_cols: List[str]
 
 
 class Preprocessor:
@@ -892,6 +933,7 @@ class Preprocessor:
         # Feature column subsets for PatchTST
         self.static_feature_cols: List[str] = []
         self.dynamic_feature_cols: List[str] = []
+        self.summary_feature_cols: List[str] = []
         # PatchTST-specific filtered feature columns
         self.patch_feature_cols: List[str] = []
         self.patch_static_feature_cols: List[str] = []
@@ -906,7 +948,7 @@ class Preprocessor:
             "is_promo",
             "series_code",
             "series_cv",
-        }
+        } | set(self.summary_feature_cols)
         self.patch_feature_cols = [
             c
             for c in self.feature_cols
@@ -993,8 +1035,12 @@ class Preprocessor:
             self.static_feature_cols = [
                 c for c in ["shop_code", "menu_code"] if c in self.feature_cols
             ]
+            summary_candidates = {"zero_ratio_84", "zero_run_max_84"}
+            self.summary_feature_cols = [c for c in summary_candidates if c in self.feature_cols]
             self.dynamic_feature_cols = [
-                c for c in self.feature_cols if c not in self.static_feature_cols
+                c
+                for c in self.feature_cols
+                if c not in self.static_feature_cols and c not in self.summary_feature_cols
             ]
             vprint(
                 f"[FIT] rich+encode: feature_cols={len(self.feature_cols)}  total_cols={len(df.columns)}  static_cols={len(self.static_cols)}"
@@ -1081,25 +1127,31 @@ class Preprocessor:
 
     def build_patch_train(
         self, df_full: pd.DataFrame
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         self.guard.assert_scope({"train"})
-        X_dyn, X_stat, Y, sids, dates, dyn_idx, stat_idx = self.windowizer.build_patch_train(
-            df_full, self.patch_feature_cols, self.patch_static_feature_cols
+        X_dyn, X_stat, X_sum, Y, sids, dates, dyn_idx, stat_idx = self.windowizer.build_patch_train(
+            df_full,
+            self.patch_feature_cols,
+            self.patch_static_feature_cols,
+            self.summary_feature_cols,
         )
         self.patch_dynamic_idx = dyn_idx
         self.patch_static_idx = stat_idx
-        return X_dyn, X_stat, Y, sids, dates
+        return X_dyn, X_stat, X_sum, Y, sids, dates
 
     def build_patch_eval(
         self, df_eval_full: pd.DataFrame
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         self.guard.assert_scope({"eval"})
-        X_dyn, X_stat, sids, dates, dyn_idx, stat_idx = self.windowizer.build_patch_eval(
-            df_eval_full, self.patch_feature_cols, self.patch_static_feature_cols
+        X_dyn, X_stat, X_sum, sids, dates, dyn_idx, stat_idx = self.windowizer.build_patch_eval(
+            df_eval_full,
+            self.patch_feature_cols,
+            self.patch_static_feature_cols,
+            self.summary_feature_cols,
         )
         self.patch_dynamic_idx = dyn_idx
         self.patch_static_idx = stat_idx
-        return X_dyn, X_stat, sids, dates
+        return X_dyn, X_stat, X_sum, sids, dates
 
     # --------------------------
     # Artifacts I/O
@@ -1118,6 +1170,7 @@ class Preprocessor:
             static_cols=self.static_cols,
             static_feature_cols=self.static_feature_cols,
             dynamic_feature_cols=self.dynamic_feature_cols,
+            summary_feature_cols=self.summary_feature_cols,
         )
         with open(path, "wb") as f:
             pickle.dump(artifacts, f)
@@ -1136,6 +1189,7 @@ class Preprocessor:
         self.static_cols = art.static_cols
         self.static_feature_cols = art.static_feature_cols
         self.dynamic_feature_cols = art.dynamic_feature_cols
+        self.summary_feature_cols = art.summary_feature_cols
         self._compute_patch_features()
         # re-wire
         self.cont_fix = DateContinuityFixer()

@@ -31,7 +31,7 @@ def test_pipeline_patchtst(tmp_path):
     orig_pt = pt_path.read_text()
     stub = orig_pt + (
         "\n"
-        "def _train(self, X_train, S_train, y_train, series_ids, label_dates, cfg, preprocessors=None):\n"
+        "def _train(self, X_train, S_train, M_train, y_train, series_ids, label_dates, cfg, preprocessors=None):\n"
         "    import os\n"
         "    os.makedirs(self.model_dir, exist_ok=True)\n"
         "    open(os.path.join(self.model_dir, 'patchtst.pt'), 'wb').close()\n"
@@ -47,7 +47,7 @@ def test_pipeline_patchtst(tmp_path):
         "\n"
         "PatchTSTTrainer.load=lambda self, path: None\n"
         "\n"
-        "def _predict(self, X, S, sid_idx, dyn_idx=None, static_idx=None):\n"
+        "def _predict(self, X, S, M, sid_idx, dyn_idx=None, static_idx=None):\n"
         "    k = 1.0\n"
         "    import numpy as np\n"
         "    mu = np.full((len(X), self.H), 2.0, dtype=float)\n"
