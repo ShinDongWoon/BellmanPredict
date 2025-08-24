@@ -83,10 +83,10 @@ def test_patchtst_intermittency_features():
     # Compute PatchTST feature lists
     pp._compute_patch_features()
 
-    # Only zero_run_len should remain among intermittency features
+    # All intermittency indicators should be retained
     assert "zero_run_len" in pp.patch_feature_cols
-    assert "zero_ratio_28" not in pp.patch_feature_cols
-    assert "days_since_last_sale" not in pp.patch_feature_cols
+    assert "zero_ratio_28" in pp.patch_feature_cols
+    assert "days_since_last_sale" in pp.patch_feature_cols
 
 
 def test_patchtst_drop_series_code():
