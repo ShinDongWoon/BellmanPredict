@@ -298,19 +298,20 @@ class PatchTSTTuner(HyperparameterTuner):
                 input_len = trial.suggest_categorical("input_len", input_lens)
                 if input_len not in self._dataset_cache:
                     self.pp.windowizer = SampleWindowizer(lookback=input_len, horizon=H)
-                    X, S, y, series_ids, label_dates = self.pp.build_patch_train(self.df)
+                    X, S, M, y, series_ids, label_dates = self.pp.build_patch_train(self.df)
                     dyn_idx = getattr(self.pp, "patch_dynamic_idx", {}).copy()
                     stat_idx = getattr(self.pp, "patch_static_idx", {}).copy()
                     self._dataset_cache[input_len] = (
                         X,
                         S,
+                        M,
                         y,
                         series_ids,
                         label_dates,
                         dyn_idx,
                         stat_idx,
                     )
-                X, S, y, series_ids, label_dates, dyn_idx, stat_idx = self._dataset_cache[input_len]
+                X, S, M, y, series_ids, label_dates, dyn_idx, stat_idx = self._dataset_cache[input_len]
                 # Reassign channel index maps to ensure they reflect the cached
                 # dataset's indices even if downstream steps mutate them.
                 self.pp.patch_dynamic_idx = dyn_idx.copy()
@@ -364,6 +365,7 @@ class PatchTSTTuner(HyperparameterTuner):
                 trainer.train(
                     X,
                     S,
+                    M,
                     y,
                     series_ids,
                     label_dates,

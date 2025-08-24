@@ -35,7 +35,7 @@ def test_patch_windowizer_dynamic_static():
     static_cols = ["feat_static"]
 
     win = SampleWindowizer(lookback=3, horizon=2)
-    X_dyn, S, Y, sids, dates, dyn_idx, stat_idx = win.build_patch_train(
+    X_dyn, S, M, Y, sids, dates, dyn_idx, stat_idx = win.build_patch_train(
         df, feature_cols, static_cols
     )
 
@@ -48,7 +48,7 @@ def test_patch_windowizer_dynamic_static():
     assert win.dynamic_idx["feat_dyn"] == 1
     assert win.static_idx["feat_static"] == 0
 
-    X_eval_dyn, S_eval, sids_eval, dates_eval, dyn_idx_e, stat_idx_e = win.build_patch_eval(
+    X_eval_dyn, S_eval, M_eval, sids_eval, dates_eval, dyn_idx_e, stat_idx_e = win.build_patch_eval(
         df, feature_cols, static_cols
     )
     assert dyn_idx == dyn_idx_e
@@ -81,7 +81,7 @@ def test_patch_windowizer_static_multi_series():
     static_cols = ["feat_static"]
 
     win = SampleWindowizer(lookback=2, horizon=1)
-    X_dyn, S, Y, sids, dates, dyn_idx, stat_idx = win.build_patch_train(
+    X_dyn, S, M, Y, sids, dates, dyn_idx, stat_idx = win.build_patch_train(
         df, feature_cols, static_cols
     )
     static_idx = stat_idx["feat_static"]
@@ -108,7 +108,7 @@ def test_static_codes_non_negative_with_unknown():
     feature_cols = ["feat_dyn", "feat_static"]
     static_cols = ["feat_static"]
     win = SampleWindowizer(lookback=3, horizon=1)
-    _, S, _, _, _, _, _ = win.build_patch_train(df, feature_cols, static_cols)
+    _, S, _, _, _, _, _, _ = win.build_patch_train(df, feature_cols, static_cols)
     assert S.shape == (2, 1)
     assert np.array_equal(S[:, 0], np.array([1, 0], dtype=np.int64))
     assert S.min() >= 0

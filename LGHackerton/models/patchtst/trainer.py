@@ -143,6 +143,7 @@ class PatchTSTParams:
     static_cardinalities: Optional[List[int]] = None
     enable_covariates: bool = True
     input_dim: int = 1
+    summary_dim: int = 0
     lr: float = 1e-3
     weight_decay: float = 1e-4
     grad_clip: float = 1.0
@@ -182,6 +183,7 @@ class _SeriesDataset(Dataset):
         scaler: str = "per_series",
         dyn_idx: Optional[Iterable[int]] = None,
         static_idx: Optional[Iterable[int]] = None,
+        summary: Optional[np.ndarray] = None,
     ):
         X = X.astype(np.float32)
         if X.ndim == 2:  # (N,L) -> (N,L,1)
@@ -191,6 +193,9 @@ class _SeriesDataset(Dataset):
         if S is None:
             S = np.zeros((len(X), 0), dtype=np.int64)
         self.S = S.astype(np.int64)
+        if summary is None:
+            summary = np.zeros((len(X), 0), dtype=np.float32)
+        self.summary = summary.astype(np.float32)
         if series_ids is None:
             series_ids = [0 for _ in range(len(X))]
         self.sids = np.array(list(series_ids), dtype=np.int64)
@@ -236,6 +241,7 @@ class _SeriesDataset(Dataset):
             np.float32(self.mu_base[idx]),
             np.float32(self.std_base[idx]),
             static_codes,
+            self.summary[idx].copy(),
         )
 
 
@@ -317,6 +323,7 @@ if TORCH_OK:
             static_cardinalities: Optional[Iterable[int]] = None,
             static_emb_dim: int = 16,
             channel_fusion: str = "attention",
+            summary_dim: int = 0,
         ):
             super().__init__()
             self.L, self.H = L, H
@@ -329,6 +336,13 @@ if TORCH_OK:
             self.blocks = nn.ModuleList([PatchTSTBlock(d_model, n_heads, dropout) for _ in range(depth)])
             self.norm = nn.LayerNorm(d_model)
             self.channel_fusion = channel_fusion
+            self.summary_mlp = None
+            if summary_dim > 0:
+                self.summary_mlp = nn.Sequential(
+                    nn.Linear(summary_dim, d_model * 2),
+                    nn.GELU(),
+                    nn.Linear(d_model * 2, d_model),
+                )
             if channel_fusion == "attention":
                 self.channel_query = nn.Parameter(torch.randn(1, 1, d_model))
                 self.channel_attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
@@ -390,11 +404,21 @@ if TORCH_OK:
             pos = F.interpolate(pos, size=n_patches, mode="linear", align_corners=False)
             return pos.transpose(1, 2).unsqueeze(2)
 
-        def forward(self, x, sid_idx=None, static_codes=None):
+        def forward(self, x, sid_idx=None, static_codes=None, summary_vec=None):
             B, L, C = x.shape
             p = x.unfold(1, self.patch_len, self.stride).contiguous()  # (B, n_patches, C, patch_len)
-            pos = self._resize_pos_embed(p.size(1))
-            z = self.proj(p) + pos  # (B, n_patches, C, d_model)
+            n_patches = p.size(1)
+            if summary_vec is not None and self.summary_mlp is not None and summary_vec.numel() > 0:
+                n_total = n_patches + 1
+            else:
+                n_total = n_patches
+            pos = self._resize_pos_embed(n_total)
+            z_p = self.proj(p)  # (B, n_patches, C, d_model)
+            if summary_vec is not None and self.summary_mlp is not None and summary_vec.numel() > 0:
+                s = self.summary_mlp(summary_vec).unsqueeze(1).unsqueeze(2).expand(-1, 1, C, -1)
+                z = torch.cat([z_p, s], dim=1) + pos
+            else:
+                z = z_p + pos
             if self.id_embed is not None and sid_idx is not None:
                 e = self.id_embed(sid_idx)
                 if self.id_proj is not None:
@@ -496,23 +520,23 @@ class PatchTSTTrainer(BaseModel):
             horizon = getattr(pp.windowizer, "H", DEFAULT_H)
             pp.windowizer.L = input_len
             pp.windowizer.H = horizon
-        X_dyn, S_stat, Y, sids, dates = pp.build_patch_train(df_full)
+        X_dyn, S_stat, M_sum, Y, sids, dates = pp.build_patch_train(df_full)
         # Guarantee channel index maps exist on the preprocessor
         if not hasattr(pp, "patch_dynamic_idx"):
             pp.patch_dynamic_idx = {}
         if not hasattr(pp, "patch_static_idx"):
             pp.patch_static_idx = {}
-        return X_dyn, S_stat, Y, sids, dates
+        return X_dyn, S_stat, M_sum, Y, sids, dates
 
     @staticmethod
     def build_eval_dataset(pp: Preprocessor, df_full: pd.DataFrame):
         """Build evaluation dataset for prediction."""
-        X_dyn, S_stat, sids, dates = pp.build_patch_eval(df_full)
+        X_dyn, S_stat, M_sum, sids, dates = pp.build_patch_eval(df_full)
         if not hasattr(pp, "patch_dynamic_idx"):
             pp.patch_dynamic_idx = {}
         if not hasattr(pp, "patch_static_idx"):
             pp.patch_static_idx = {}
-        return X_dyn, S_stat, sids, dates
+        return X_dyn, S_stat, M_sum, sids, dates
 
     def __init__(
         self,
@@ -544,6 +568,7 @@ class PatchTSTTrainer(BaseModel):
         self,
         X_train: np.ndarray,
         S_train: np.ndarray,
+        M_train: np.ndarray,
         y_train: np.ndarray,
         series_ids: np.ndarray,
         label_dates: np.ndarray,
@@ -574,6 +599,7 @@ class PatchTSTTrainer(BaseModel):
         order = np.argsort(label_dates)
         X_train = X_train[order]
         S_train = S_train[order]
+        M_train = M_train[order]
         y_train = y_train[order]
         series_ids = np.array(series_ids)[order]
         label_dates = label_dates[order]
@@ -584,6 +610,8 @@ class PatchTSTTrainer(BaseModel):
         self.params.enable_covariates = self.params.input_dim > 1
         self.model_params["input_dim"] = self.params.input_dim
         self.model_params["enable_covariates"] = self.params.enable_covariates
+        self.params.summary_dim = M_train.shape[1]
+        self.model_params["summary_dim"] = self.params.summary_dim
         unique_sids = sorted(set(series_ids))
         self.id2idx = {sid:i for i,sid in enumerate(unique_sids)}
         self.idx2id = unique_sids
@@ -701,6 +729,7 @@ class PatchTSTTrainer(BaseModel):
                 scaler=self.params.scaler,
                 dyn_idx=dyn_idx,
                 static_idx=stat_idx,
+                summary=M_train[tr_mask],
             )
             va_ds = _SeriesDataset(
                 X_train[va_mask],
@@ -710,6 +739,7 @@ class PatchTSTTrainer(BaseModel):
                 scaler=self.params.scaler,
                 dyn_idx=dyn_idx,
                 static_idx=stat_idx,
+                summary=M_train[va_mask],
             )
             pin = self.device != "cpu"
             tr_loader = DataLoader(
@@ -741,6 +771,7 @@ class PatchTSTTrainer(BaseModel):
                 self.params.static_cardinalities,
                 self.params.static_embed_dim,
                 self.params.channel_fusion,
+                summary_dim=M_train.shape[1],
             ).to(self.device)
             opt = torch.optim.AdamW(net.parameters(), lr=self.params.lr, weight_decay=self.params.weight_decay)
             smape_loss = WeightedSMAPELoss(reduction="mean")
@@ -758,15 +789,16 @@ class PatchTSTTrainer(BaseModel):
                 net.train()
                 nb_sum = clf_sum = s_sum = sm_sum = 0.0
                 batch_count = 0
-                for xb, yb, sb, mu_s, std_s, static_codes in tr_loader:
+                for xb, yb, sb, mu_s, std_s, static_codes, summary in tr_loader:
                     xb = xb.to(self.device, non_blocking=pin)
                     yb = yb.to(self.device, non_blocking=pin)
                     sb = sb.to(self.device, non_blocking=pin)
                     mu_s = mu_s.to(self.device, non_blocking=pin)
                     std_s = std_s.to(self.device, non_blocking=pin)
                     static_codes = static_codes.to(self.device, non_blocking=pin)
+                    summary = summary.to(self.device, non_blocking=pin)
                     opt.zero_grad()
-                    logits, mu_raw, kappa_raw = net(xb, sb, static_codes)
+                    logits, mu_raw, kappa_raw = net(xb, sb, static_codes, summary)
                     mu = F.softplus(mu_raw) + 1e-6
                     kappa = F.softplus(kappa_raw) + 1e-6
                     y_raw = yb
@@ -847,14 +879,15 @@ class PatchTSTTrainer(BaseModel):
                 T = []
                 S = []
                 with torch.no_grad():
-                    for xb, yb, sb, mu_s, std_s, static_codes in va_loader:
+                    for xb, yb, sb, mu_s, std_s, static_codes, summary in va_loader:
                         xb = xb.to(self.device, non_blocking=pin)
                         yb = yb.to(self.device, non_blocking=pin)
                         sb = sb.to(self.device, non_blocking=pin)
                         mu_s = mu_s.to(self.device, non_blocking=pin)
                         std_s = std_s.to(self.device, non_blocking=pin)
                         static_codes = static_codes.to(self.device, non_blocking=pin)
-                        logits, mu_raw, kappa_raw = net(xb, sb, static_codes)
+                        summary = summary.to(self.device, non_blocking=pin)
+                        logits, mu_raw, kappa_raw = net(xb, sb, static_codes, summary)
                         p = torch.sigmoid(logits)
                         mu = F.softplus(mu_raw) + 1e-6
                         kappa = F.softplus(kappa_raw) + 1e-6
@@ -923,14 +956,15 @@ class PatchTSTTrainer(BaseModel):
             Y = []
             S = []
             with torch.no_grad():
-                for xb, yb, sb, mu_s, std_s, static_codes in va_loader:
+                for xb, yb, sb, mu_s, std_s, static_codes, summary in va_loader:
                     xb = xb.to(self.device, non_blocking=pin)
                     yb = yb.to(self.device, non_blocking=pin)
                     sb = sb.to(self.device, non_blocking=pin)
                     mu_s = mu_s.to(self.device, non_blocking=pin)
                     std_s = std_s.to(self.device, non_blocking=pin)
                     static_codes = static_codes.to(self.device, non_blocking=pin)
-                    logits, mu_raw, kappa_raw = net(xb, sb, static_codes)
+                    summary = summary.to(self.device, non_blocking=pin)
+                    logits, mu_raw, kappa_raw = net(xb, sb, static_codes, summary)
                     p = torch.sigmoid(logits)
                     mu = F.softplus(mu_raw) + 1e-6
                     kappa = F.softplus(kappa_raw) + 1e-6
@@ -1000,6 +1034,7 @@ class PatchTSTTrainer(BaseModel):
         self,
         X_eval: np.ndarray,
         S_eval: np.ndarray,
+        M_eval: np.ndarray,
         series_idx: Optional[Iterable[int]] = None,
         dyn_idx: Optional[Iterable[int]] = None,
         static_idx: Optional[Iterable[int]] = None,
@@ -1017,6 +1052,7 @@ class PatchTSTTrainer(BaseModel):
             scaler=self.params.scaler,
             dyn_idx=dyn_idx or self.dynamic_idx_map,
             static_idx=static_idx or self.static_idx_map,
+            summary=M_eval,
         )
         pin = self.device != "cpu"
         loader = torch.utils.data.DataLoader(
@@ -1028,13 +1064,14 @@ class PatchTSTTrainer(BaseModel):
         )
         outs = []
         with torch.no_grad():
-            for xb, _, sb, mu_s, std_s, static_codes in loader:
+            for xb, _, sb, mu_s, std_s, static_codes, summary in loader:
                 xb = xb.to(self.device, non_blocking=pin)
                 sb = sb.to(self.device, non_blocking=pin)
                 mu_s = mu_s.to(self.device, non_blocking=pin)
                 std_s = std_s.to(self.device, non_blocking=pin)
                 static_codes = static_codes.to(self.device, non_blocking=pin)
-                preds = [m(xb, sb, static_codes) for m in self.models]
+                summary = summary.to(self.device, non_blocking=pin)
+                preds = [m(xb, sb, static_codes, summary) for m in self.models]
                 logits, mu_raw, kappa_raw = zip(*preds)
                 logits = torch.stack(logits)
                 p = torch.sigmoid(logits)
@@ -1057,11 +1094,12 @@ class PatchTSTTrainer(BaseModel):
 
     def predict_df(self, eval_df):
         """Return conditional-mean prediction dataframe for PatchTST."""
-        X_eval, S_eval, sids, _ = eval_df
+        X_eval, S_eval, M_eval, sids, _ = eval_df
         sid_idx = np.array([self.id2idx.get(sid, 0) for sid in sids])
         y_pred = self.predict(
             X_eval,
             S_eval,
+            M_eval,
             sid_idx,
             dyn_idx=self.dynamic_idx_map,
             static_idx=self.static_idx_map,
@@ -1264,6 +1302,7 @@ class PatchTSTTrainer(BaseModel):
                 self.params.static_cardinalities,
                 self.params.static_embed_dim,
                 self.params.channel_fusion,
+                summary_dim=self.params.summary_dim,
             )
             net.load_state_dict(
                 torch.load(os.path.join(self.model_dir, fname), map_location=torch.device(self.device)),

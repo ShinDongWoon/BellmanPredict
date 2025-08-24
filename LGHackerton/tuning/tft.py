@@ -56,7 +56,9 @@ class TFTTuner(HyperparameterTuner):
         """Construct training tensors for TFT."""
 
         if self._dataset is None:
-            self._dataset = self.pp.build_patch_train(self.df)
+            X, S, M, y, series_ids, label_dates = self.pp.build_patch_train(self.df)
+            # TFT expects dynamic inputs X, targets y and identifiers
+            self._dataset = (X, y, series_ids, label_dates)
         return self._dataset
 
     # ------------------------------------------------------------------

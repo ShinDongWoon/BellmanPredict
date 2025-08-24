@@ -101,7 +101,7 @@ def run_patchtst_grid_search(cfg_path: str | Path) -> None:
 
     device = "cuda" if torch and torch.cuda.is_available() else "cpu"
     results: List[dict[str, Any]] = []
-    dataset_cache: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = {}
+    dataset_cache: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = {}
 
     # Prebuild datasets for each unique input length
     for inp in input_lens:
@@ -111,7 +111,7 @@ def run_patchtst_grid_search(cfg_path: str | Path) -> None:
 
     # Iterate over grid while reusing cached datasets
     for inp in input_lens:
-        X, S, y, series_ids, label_dates = dataset_cache[inp]
+        X, S, M, y, series_ids, label_dates = dataset_cache[inp]
         for patch, lr, scaler in itertools.product(patch_lens, lrs, scalers):
             if inp % patch != 0:
                 continue
@@ -127,7 +127,7 @@ def run_patchtst_grid_search(cfg_path: str | Path) -> None:
                 trainer = PatchTSTTrainer(
                     params=params, L=inp, H=H, model_dir=cfg.model_dir, device=device
                 )
-                trainer.train(X, S, y, series_ids, label_dates, cfg)
+                trainer.train(X, S, M, y, series_ids, label_dates, cfg)
                 oof = trainer.get_oof()
                 outlets = oof["series_id"].str.split("::").str[0].values
                 val_w = weighted_smape_np(

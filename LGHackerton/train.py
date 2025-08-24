@@ -160,7 +160,7 @@ def run_training(ctx: PipelineContext) -> None:
     except AttributeError as e:
         raise RuntimeError(f"{ctx.model_name} build_dataset not implemented") from e
     try:
-        X_train, S_train, y_train, series_ids, label_dates = build_dataset(
+        X_train, S_train, M_train, y_train, series_ids, label_dates = build_dataset(
             ctx.preprocessor, ctx.df_full, ctx.input_len
         )
     except NotImplementedError as e:
@@ -184,6 +184,7 @@ def run_training(ctx: PipelineContext) -> None:
     trainer.train(
         X_train,
         S_train,
+        M_train,
         y_train,
         series_ids,
         label_dates,
