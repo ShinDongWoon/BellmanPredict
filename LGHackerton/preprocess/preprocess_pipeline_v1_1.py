@@ -381,6 +381,7 @@ class MissingAndOutlierHandler:
       to 0 into :data:`SALES_FILLED_COL`
     - Outlier capping with per-series thresholds computed from TRAIN only
       (Hampel-like robust cap: ``min(Q3+1.5*IQR, Q99)``)
+    - Negative sales are clipped to zero prior to capping and transformation.
     - Applies an ``arcsinh`` transformation so negative values are preserved
       rather than clipped to zero
     """
@@ -391,10 +392,16 @@ class MissingAndOutlierHandler:
         _v = _pd.Series(self.caps).apply(lambda x: not _pd.isna(x)).sum()
         vprint(f"[OutlierCap.fit] series={len(self.caps)}  with_caps={_v}")
 
+    def _clip_negative(self, x: pd.Series) -> pd.Series:
+        cnt = (x < 0).sum()
+        if cnt > 0:
+            vprint(f"[MissingAndOutlierHandler] clipped {cnt} negative sales to zero")
+        return x.clip(lower=0)
+
     def fit(self, df: pd.DataFrame):
         caps = {}
         for sid, g in df.groupby(SERIES_COL, sort=False):
-            x = g[SALES_COL].dropna().values
+            x = self._clip_negative(g[SALES_COL].dropna()).values
             if len(x) == 0:
                 caps[sid] = np.nan
                 continue
@@ -408,6 +415,7 @@ class MissingAndOutlierHandler:
 
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
         d = df.copy()
+        d[SALES_COL] = self._clip_negative(d[SALES_COL])
 
         # apply caps while preserving negatives
         def cap_series(sid: str, x: pd.Series) -> pd.Series:
