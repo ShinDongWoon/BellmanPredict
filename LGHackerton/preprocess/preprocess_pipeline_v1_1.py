@@ -904,8 +904,6 @@ class Preprocessor:
         drop = {
             "is_priority_outlet",
             "is_promo",
-            "zero_ratio_28",
-            "days_since_last_sale",
             "series_code",
             "series_cv",
         }

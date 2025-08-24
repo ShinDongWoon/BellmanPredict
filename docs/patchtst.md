@@ -41,3 +41,10 @@ prob = torch.sigmoid(logits)
 
 Each channel is patched and projected separately; the resulting embeddings are fused
 late using the configured strategy before producing classification and regression outputs.
+
+## Intermittency features
+
+`zero_ratio_28` and `days_since_last_sale` describe demand sparsity patterns.  They
+are useful signals for PatchTST because the model can attend to prolonged zero-sales
+stretches when forming patches.  Unlike other preprocessing variants that drop these
+columns, PatchTST keeps them to better model intermittent demand.
