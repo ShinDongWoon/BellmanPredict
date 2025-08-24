@@ -905,6 +905,8 @@ class PatchTSTTrainer(BaseModel):
             self.models.append(net)
         # calibrate gating threshold using collected records
         self.calibrate_tau()
+        # produce reliability plot from calibration records
+        self.plot_reliability()
         self.save(os.path.join(self.model_dir,"patchtst.pt"))
     def predict(
         self,
@@ -1043,6 +1045,55 @@ class PatchTSTTrainer(BaseModel):
         else:
             self.tau = _search(np.ones_like(hs, dtype=bool))
         return self.tau
+
+    def plot_reliability(
+        self,
+        records: Optional[List[Tuple[float, float, float, float, str, int]]] = None,
+        bins: int = 10,
+        save_path: Optional[str] = None,
+    ) -> None:
+        """Plot a reliability diagram for gating probabilities.
+
+        Parameters
+        ----------
+        records : Optional list of calibration tuples
+            Each record is expected to contain ``(logit, mu, kappa, y, sid, h)``.
+            If ``None``, ``self.calib_records`` is used.
+        bins : int, default 10
+            Number of probability bins.
+        save_path : Optional[str]
+            Destination path for the generated figure. Defaults to
+            ``model_dir/reliability.png``.
+        """
+
+        if records is None:
+            records = self.calib_records
+        if not records:
+            warnings.warn("No calibration records to plot reliability.")
+            return
+        import matplotlib.pyplot as plt
+
+        logits = np.array([r[0] for r in records])
+        y_true = np.array([r[3] for r in records])
+        probs = 1.0 / (1.0 + np.exp(-logits))
+        z = (y_true > 0).astype(float)
+        bin_edges = np.linspace(0.0, 1.0, bins + 1)
+        bin_idx = np.digitize(probs, bin_edges, right=True)
+        exp, act = [], []
+        for i in range(1, bins + 1):
+            mask = bin_idx == i
+            if mask.any():
+                exp.append(probs[mask].mean())
+                act.append(z[mask].mean())
+        plt.figure()
+        plt.plot(exp, act, marker="o")
+        plt.plot([0, 1], [0, 1], "--", color="gray")
+        plt.xlabel("Predicted probability")
+        plt.ylabel("Empirical frequency")
+        plt.title("Reliability Diagram")
+        save_path = save_path or os.path.join(self.model_dir, "reliability.png")
+        plt.savefig(save_path)
+        plt.close()
 
     def get_oof(self) -> pd.DataFrame:
         return pd.DataFrame(self.oof_records)
