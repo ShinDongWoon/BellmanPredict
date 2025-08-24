@@ -949,6 +949,13 @@ class Preprocessor:
             self.rich.fit(df)
             return self.rich.transform(df)
 
+        def _drop_dow(df: pd.DataFrame) -> pd.DataFrame:
+            return (
+                df.drop(columns=["dow"], errors="ignore")
+                if self.calendar.dow_mode == "cyclical"
+                else df
+            )
+
         def _encode(df: pd.DataFrame) -> pd.DataFrame:
             self.encoder.fit(df)
             return self.encoder.transform(df)
@@ -990,6 +997,7 @@ class Preprocessor:
             ("missing_outlier", _missing_outlier),
             ("strict_feats", _strict_feats),
             ("rich_lookup", _rich_lookup),
+            ("drop_dow", _drop_dow),
             ("encoder", _encode),
             ("drop_low_var", _drop_low_var),
             ("feature_cols", _feature_cols),
@@ -1011,6 +1019,13 @@ class Preprocessor:
         self.guard.set_scope("eval")
         self.guard.assert_scope({"eval"})
 
+        def _drop_dow(df: pd.DataFrame) -> pd.DataFrame:
+            return (
+                df.drop(columns=["dow"], errors="ignore")
+                if self.calendar.dow_mode == "cyclical"
+                else df
+            )
+
         steps = [
             ("schema", lambda df: self.schema.transform(df, allow_new=False)),
             ("continuity", self.cont_fix.transform),
@@ -1018,8 +1033,12 @@ class Preprocessor:
             ("missing_outlier", self.missing_outlier.transform),
             ("strict_feats", self.strict_feats.transform),
             ("rich_lookup", self.rich.transform),
+            ("drop_dow", _drop_dow),
             ("encoder", self.encoder.transform),
-            ("drop_low_var", lambda df: df.drop(columns=self.low_var_cols, errors="ignore")),
+            (
+                "drop_low_var",
+                lambda df: df.drop(columns=self.low_var_cols, errors="ignore"),
+            ),
         ]
 
         df = df_eval_raw

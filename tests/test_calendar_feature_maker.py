@@ -12,6 +12,9 @@ from LGHackerton.preprocess.preprocess_pipeline_v1_1 import (  # noqa: E402
     DATE_COL,
     SHOP_COL,
     Preprocessor,
+    RAW_DATE,
+    RAW_KEY,
+    RAW_QTY,
 )
 
 
@@ -126,3 +129,36 @@ def test_preprocessor_cyclical_option_controls_dummies():
 
     assert not dummy(out_default.columns)
     assert dummy(out_dum.columns)
+
+
+def test_preprocessor_drops_dow_when_cyclical():
+    df = pd.DataFrame(
+        {
+            RAW_DATE: pd.to_datetime(
+                ["2024-01-01", "2024-01-01", "2024-01-02", "2024-01-02"]
+            ),
+            RAW_KEY: ["shop1_menu1", "shop2_menu2", "shop1_menu1", "shop2_menu2"],
+            RAW_QTY: [1, 2, 3, 4],
+        }
+    )
+    pp = Preprocessor()
+    out = pp.fit_transform_train(df)
+    assert "dow" not in out.columns
+    assert "dow" not in pp.feature_cols
+
+
+def test_preprocessor_keeps_dow_when_not_cyclical():
+    df = pd.DataFrame(
+        {
+            RAW_DATE: pd.to_datetime(
+                ["2024-01-01", "2024-01-01", "2024-01-02", "2024-01-02"]
+            ),
+            RAW_KEY: ["shop1_menu1", "shop2_menu2", "shop1_menu1", "shop2_menu2"],
+            RAW_QTY: [1, 2, 3, 4],
+        }
+    )
+    pp = Preprocessor()
+    pp.calendar.dow_mode = "integer"
+    out = pp.fit_transform_train(df)
+    assert "dow" in out.columns
+    assert "dow" in pp.feature_cols
