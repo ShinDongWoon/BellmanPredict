@@ -85,6 +85,8 @@ class PatchTSTParams:
         Learning rate for the optimizer.
     weight_decay : float
         Weight decay for the optimizer.
+    grad_clip : float
+        Maximum norm for gradient clipping.
     batch_size : int
         Mini-batch size used during training and inference.
     max_epochs : int
@@ -142,6 +144,7 @@ class PatchTSTParams:
     input_dim: int = 1
     lr: float = 1e-3
     weight_decay: float = 1e-4
+    grad_clip: float = 1.0
     batch_size: int = 256
     max_epochs: int = 200
     patience: int = 20
@@ -533,6 +536,7 @@ class PatchTSTTrainer(BaseModel):
             self.static_idx_map = getattr(pp0, "patch_static_idx", {})
         self._ensure_torch(); import torch
         os.makedirs(self.model_dir, exist_ok=True)
+        print(f"Using gradient clipping max_norm={self.params.grad_clip}")
         self.oof_records = []
         self.calib_records = []
         self.calib_priority_weight = cfg.priority_weight
@@ -778,6 +782,7 @@ class PatchTSTTrainer(BaseModel):
                         + self.params.lambda_smooth * L_sm
                     )
                     loss.backward()
+                    torch.nn.utils.clip_grad_norm_(net.parameters(), self.params.grad_clip)
                     opt.step()
                     nb_sum += float(L_nb.item())
                     clf_sum += float(L_clf.item())
