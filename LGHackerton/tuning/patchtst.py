@@ -170,8 +170,13 @@ class PatchTSTTuner(HyperparameterTuner):
             val = params.get(name)
             if not isinstance(val, (float, int)) or not (lo <= float(val) <= hi):
                 raise ValueError(f"{name} out of range: {val}")
-        if params.get("patch_len") != params.get("stride"):
-            raise ValueError(f"stride out of range: {params.get('stride')}")
+        patch_len = params.get("patch_len")
+        stride = params.get("stride")
+        if patch_len is None or stride is None:
+            raise ValueError("patch_len and stride must be provided")
+        n_patches_eval = 1 + (28 - patch_len) // stride
+        if n_patches_eval < 8:
+            raise ValueError("n_patches_eval < 8")
 
     def run(self, n_trials: int, force: bool) -> dict:  # type: ignore[override]
         """Execute Optuna search over :class:`PatchTSTSearchSpace`.
@@ -326,6 +331,7 @@ class PatchTSTTuner(HyperparameterTuner):
                     "n_heads": trial.suggest_categorical("n_heads", search.n_heads),
                     "depth": trial.suggest_int("depth", *search.depth),
                     "patch_len": trial.suggest_categorical("patch_len", search.patch_len),
+                    "stride": trial.suggest_categorical("stride", search.stride),
                     "dropout": dropout,
                     "id_embed_dim": trial.suggest_categorical(
                         "id_embed_dim", search.id_embed_dim
@@ -337,7 +343,10 @@ class PatchTSTTuner(HyperparameterTuner):
                     "patience": trial.suggest_int("patience", *search.patience),
                 }
                 patch_len = params["patch_len"]
-                params["stride"] = patch_len
+                stride = params["stride"]
+                n_patches_eval = 1 + (28 - patch_len) // stride
+                if n_patches_eval < 8:
+                    raise optuna.TrialPruned()
                 params["num_workers"] = PATCH_PARAMS.get("num_workers", 0)
                 if input_len % patch_len != 0:
                     raise optuna.TrialPruned()

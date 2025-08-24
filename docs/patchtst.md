@@ -2,6 +2,18 @@
 
 PatchTST consumes tensors shaped `(B, L, C)` where `B` is the batch size, `L` the input length and `C` the number of channels. Each channel is unfolded into patches of length `patch_len` and passed through a linear layer `nn.Linear(patch_len, d_model)` so patches are projected independently before fusion.
 
+## Evaluation constraints
+
+Patch length and stride combinations must produce at least eight patches over the
+28-step evaluation span. The number of patches is calculated as
+
+```
+n_patches_eval = 1 + (28 - patch_len) // stride
+```
+
+Trials yielding fewer than eight patches are rejected during hyperparameter
+search.
+
 ## Channel fusion
 
 The `channel_fusion` hyperparameter controls how channel embeddings are merged:
