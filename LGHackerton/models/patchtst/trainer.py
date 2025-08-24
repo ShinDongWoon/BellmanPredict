@@ -27,6 +27,8 @@ from .train import (
     combine_predictions_thresholded,
 )
 
+SINH_MAX = 15.0
+
 
 def temperature_schedule(
     epoch: int,
@@ -735,6 +737,8 @@ class PatchTSTTrainer(BaseModel):
                     if self.params.scaler == "revin":
                         y_raw = y_raw * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
                         mu_unscaled = mu * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
+                    y_raw = torch.clamp(y_raw, -SINH_MAX, SINH_MAX)
+                    mu_unscaled = torch.clamp(mu_unscaled, -SINH_MAX, SINH_MAX)
                     y_count = torch.sinh(y_raw)
                     mu_count = torch.sinh(mu_unscaled)
                     M = y_count > 0  # existing mask of positive counts
@@ -805,6 +809,8 @@ class PatchTSTTrainer(BaseModel):
                         if self.params.scaler == "revin":
                             mu_unscaled = mu * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
                             yb = yb * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
+                        yb = torch.clamp(yb, -SINH_MAX, SINH_MAX)
+                        mu_unscaled = torch.clamp(mu_unscaled, -SINH_MAX, SINH_MAX)
                         yb_count = torch.sinh(yb)
                         mu_count = torch.sinh(mu_unscaled)
                         _ = combine_predictions_thresholded(
@@ -876,6 +882,8 @@ class PatchTSTTrainer(BaseModel):
                     if self.params.scaler == "revin":
                         mu_unscaled = mu * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
                         yb = yb * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
+                    yb = torch.clamp(yb, -SINH_MAX, SINH_MAX)
+                    mu_unscaled = torch.clamp(mu_unscaled, -SINH_MAX, SINH_MAX)
                     yb_count = torch.sinh(yb)
                     mu_count = torch.sinh(mu_unscaled)
                     _ = combine_predictions_thresholded(
@@ -978,6 +986,7 @@ class PatchTSTTrainer(BaseModel):
                 kappa = torch.stack([F.softplus(k) + 1e-6 for k in kappa_raw])
                 if self.params.scaler == "revin":
                     mu = mu * std_s.view(1, -1, 1) + mu_s.view(1, -1, 1)
+                mu = torch.clamp(mu, -SINH_MAX, SINH_MAX)
                 mu = torch.sinh(mu)
                 out = combine_predictions_thresholded(
                     p=p,
