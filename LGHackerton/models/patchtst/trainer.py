@@ -364,10 +364,37 @@ if TORCH_OK:
                     nn.Linear(d_model * 2, d_model * 2),
                 )
 
+        def _resize_pos_embed(self, n_patches: int):
+            """Resize positional embeddings to match ``n_patches``.
+
+            The positional embedding parameter is interpolated along the patch
+            dimension using linear interpolation to accommodate inputs with a
+            different number of patches than originally initialised.
+
+            Parameters
+            ----------
+            n_patches : int
+                Target number of patches.
+
+            Returns
+            -------
+            torch.Tensor
+                Positional embeddings resized to ``(1, n_patches, 1, d_model)``.
+            """
+
+            if self.pos_embed.size(1) == n_patches:
+                return self.pos_embed
+
+            # reshape to (1, d_model, orig_n_patches) for interpolation
+            pos = self.pos_embed[:, :, 0, :].transpose(1, 2)
+            pos = F.interpolate(pos, size=n_patches, mode="linear", align_corners=False)
+            return pos.transpose(1, 2).unsqueeze(2)
+
         def forward(self, x, sid_idx=None, static_codes=None):
             B, L, C = x.shape
             p = x.unfold(1, self.patch_len, self.stride).contiguous()  # (B, n_patches, C, patch_len)
-            z = self.proj(p) + self.pos_embed  # (B, n_patches, C, d_model)
+            pos = self._resize_pos_embed(p.size(1))
+            z = self.proj(p) + pos  # (B, n_patches, C, d_model)
             if self.id_embed is not None and sid_idx is not None:
                 e = self.id_embed(sid_idx)
                 if self.id_proj is not None:
