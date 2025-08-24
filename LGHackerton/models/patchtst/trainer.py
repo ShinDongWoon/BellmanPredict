@@ -561,6 +561,8 @@ class PatchTSTTrainer(BaseModel):
         # calibration storage and calibrated tau
         self.calib_records: List[Tuple[float, float, float, float, str, int]] = []
         self.tau: float | torch.Tensor = self.params.tau
+        # optional mapping from group id -> index into tau vector
+        self.tau_group_index: Dict[int, int] | None = None
 
     def _ensure_torch(self):
         if not TORCH_OK: raise RuntimeError(f"PyTorch not available: {_TORCH_ERR}")
@@ -1038,6 +1040,7 @@ class PatchTSTTrainer(BaseModel):
         series_idx: Optional[Iterable[int]] = None,
         dyn_idx: Optional[Iterable[int]] = None,
         static_idx: Optional[Iterable[int]] = None,
+        groups: Optional[Iterable[int]] = None,
     ) -> np.ndarray:
         self._ensure_torch(); import torch
         if not self.models:
@@ -1063,6 +1066,8 @@ class PatchTSTTrainer(BaseModel):
             num_workers=self.params.num_workers,
         )
         outs = []
+        group_arr = np.asarray(groups, dtype=int) if groups is not None else None
+        offset = 0
         with torch.no_grad():
             for xb, _, sb, mu_s, std_s, static_codes, summary in loader:
                 xb = xb.to(self.device, non_blocking=pin)
@@ -1081,11 +1086,22 @@ class PatchTSTTrainer(BaseModel):
                     mu = mu * std_s.view(1, -1, 1) + mu_s.view(1, -1, 1)
                 mu = torch.clamp(mu, -SINH_MAX, SINH_MAX)
                 mu = torch.sinh(mu)
+                if group_arr is not None and self.tau_group_index is not None:
+                    batch_groups = group_arr[offset : offset + xb.size(0)]
+                    offset += xb.size(0)
+                    idx = [self.tau_group_index.get(int(g), 0) for g in batch_groups]
+                    tau_b = self.tau[idx].to(self.device, dtype=mu.dtype).view(1, -1, 1)
+                elif isinstance(self.tau, torch.Tensor):
+                    tau_b = self.tau.to(self.device, dtype=mu.dtype)
+                    if tau_b.ndim == 1 and tau_b.numel() == self.H:
+                        tau_b = tau_b.view(1, 1, self.H)
+                else:
+                    tau_b = torch.tensor(self.tau, dtype=mu.dtype, device=self.device)
                 out = combine_predictions_thresholded(
                     p=p,
                     mu=mu,
                     kappa=kappa,
-                    tau=self.tau,
+                    tau=tau_b,
                     temperature=None,
                 ).mean(0)
                 outs.append(out.cpu().numpy())
@@ -1094,7 +1110,8 @@ class PatchTSTTrainer(BaseModel):
 
     def predict_df(self, eval_df):
         """Return conditional-mean prediction dataframe for PatchTST."""
-        X_eval, S_eval, M_eval, sids, _ = eval_df
+        X_eval, S_eval, M_eval, sids, *rest = eval_df
+        groups = rest[0] if rest else None
         sid_idx = np.array([self.id2idx.get(sid, 0) for sid in sids])
         y_pred = self.predict(
             X_eval,
@@ -1103,6 +1120,7 @@ class PatchTSTTrainer(BaseModel):
             sid_idx,
             dyn_idx=self.dynamic_idx_map,
             static_idx=self.static_idx_map,
+            groups=groups,
         )
         reps = np.repeat(sids, self.H)
         hs = np.tile(np.arange(1, self.H + 1), len(sids))
@@ -1113,8 +1131,22 @@ class PatchTSTTrainer(BaseModel):
         self,
         tau_grid: Iterable[float] | None = None,
         per_horizon: bool = False,
+        groups: Optional[Iterable[int]] = None,
     ) -> float | torch.Tensor:
-        """Calibrate gating threshold ``tau`` using stored validation outputs."""
+        """Calibrate gating threshold ``tau`` using stored validation outputs.
+
+        Parameters
+        ----------
+        tau_grid:
+            Grid of candidate threshold values.
+        per_horizon:
+            If ``True``, compute a separate threshold for each horizon ``h``.
+        groups:
+            Optional array of group identifiers aligned with the calibration
+            records. When provided, a separate threshold is fitted for each
+            distinct group and the resulting vector is stored in ``self.tau``.
+            Group identifiers are expected to be integer encoded.
+        """
         self._ensure_torch(); import torch
         if not self.calib_records:
             self.tau = self.params.tau
@@ -1163,7 +1195,21 @@ class PatchTSTTrainer(BaseModel):
                     best_tau = float(t)
             return best_tau
 
-        if per_horizon:
+        if groups is not None:
+            groups = np.asarray(groups)
+            if len(groups) != len(records):
+                raise ValueError("groups length must match calibration records")
+            uniq = np.unique(groups)
+            tau_vec = []
+            for g in uniq:
+                mask = groups == g
+                if mask.any():
+                    tau_vec.append(_search(mask))
+                else:
+                    tau_vec.append(self.params.tau)
+            self.tau = torch.tensor(tau_vec, dtype=torch.float32)
+            self.tau_group_index = {int(g): i for i, g in enumerate(uniq)}
+        elif per_horizon:
             taus = []
             for h in range(1, self.H + 1):
                 mask = hs == h
@@ -1172,8 +1218,10 @@ class PatchTSTTrainer(BaseModel):
                 else:
                     taus.append(self.params.tau)
             self.tau = torch.tensor(taus, dtype=torch.float32)
+            self.tau_group_index = None
         else:
             self.tau = _search(np.ones_like(hs, dtype=bool))
+            self.tau_group_index = None
         return self.tau
 
     def plot_reliability(
