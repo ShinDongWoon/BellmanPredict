@@ -737,7 +737,7 @@ class PatchTSTTrainer(BaseModel):
                         mu_unscaled = mu * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
                     y_count = torch.sinh(y_raw)
                     mu_count = torch.sinh(mu_unscaled)
-                    M = (y_count > 0)
+                    M = y_count > 0  # existing mask of positive counts
                     z = M.float()
                     series_w = self.series_weight_tensor[sb]
                     w = torch.where(M, series_w.unsqueeze(1), torch.ones_like(y_count))
@@ -748,7 +748,13 @@ class PatchTSTTrainer(BaseModel):
                             device=self.device,
                         ).view(-1, 1)
                         w = w * priority_w
-                    nb_loss = trunc_nb_nll(y_count, mu_count, kappa)
+                    nb_loss = torch.zeros_like(y_count)
+                    if M.any():
+                        nb_loss[M] = trunc_nb_nll(
+                            y_count[M],
+                            mu_count[M],
+                            kappa[M],
+                        )
                     L_nb = (nb_loss * w * z).sum() / torch.clamp(z.sum(), min=1.0)
                     L_clf = hurdle_nll(logits, z, w)
                     y_hat = combine_predictions_thresholded(
