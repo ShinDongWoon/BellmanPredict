@@ -93,6 +93,8 @@ class PatchTSTParams:
         Weight for the negative binomial regression loss component.
     lambda_s : float
         Scaling applied to the sparsity regularisation term.
+    lambda_smooth : float
+        Weight for temporal smoothness.
     tau : float
         Threshold applied to the classifier probability for gating.
     temp_start : float
@@ -143,6 +145,7 @@ class PatchTSTParams:
     patience: int = 20
     lambda_nb: float = 1.0
     lambda_s: float = 0.05
+    lambda_smooth: float = 0.0
     tau: float = 0.5
     temp_start: float = 1.0
     temp_end: float = 0.05
@@ -714,7 +717,7 @@ class PatchTSTTrainer(BaseModel):
                     self.params.temp_anneal_epochs,
                 )
                 net.train()
-                nb_sum = clf_sum = s_sum = 0.0
+                nb_sum = clf_sum = s_sum = sm_sum = 0.0
                 batch_count = 0
                 for xb, yb, sb, mu_s, std_s, static_codes in tr_loader:
                     xb = xb.to(self.device, non_blocking=pin)
@@ -725,7 +728,6 @@ class PatchTSTTrainer(BaseModel):
                     static_codes = static_codes.to(self.device, non_blocking=pin)
                     opt.zero_grad()
                     logits, mu_raw, kappa_raw = net(xb, sb, static_codes)
-                    p = torch.sigmoid(logits)
                     mu = F.softplus(mu_raw) + 1e-6
                     kappa = F.softplus(kappa_raw) + 1e-6
                     y_raw = yb
@@ -755,20 +757,25 @@ class PatchTSTTrainer(BaseModel):
                         temperature=curr_T,
                     )
                     L_s = smape_loss(y_hat, y_raw, w)
+                    p = torch.sigmoid(logits)
+                    L_sm = torch.mean(torch.abs(p[:, 1:] - p[:, :-1]))
                     loss = (
                         self.params.lambda_nb * L_nb
                         + L_clf
                         + self.params.lambda_s * L_s
+                        + self.params.lambda_smooth * L_sm
                     )
                     loss.backward()
                     opt.step()
                     nb_sum += float(L_nb.item())
                     clf_sum += float(L_clf.item())
                     s_sum += float(L_s.item())
+                    sm_sum += float(L_sm.item())
                     batch_count += 1
                 print(
                     f"Fold {i} Epoch {ep} Train: L_nb={nb_sum/batch_count:.4f} "
-                    f"L_clf={clf_sum/batch_count:.4f} L_s={s_sum/batch_count:.4f}"
+                    f"L_clf={clf_sum/batch_count:.4f} L_s={s_sum/batch_count:.4f} "
+                    f"L_sm={sm_sum/batch_count:.4f}"
                 )
                 net.eval()
                 P = []
