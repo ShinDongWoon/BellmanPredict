@@ -9,7 +9,7 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 from LGHackerton.models.patchtst import (
     combine_predictions,
     combine_predictions_thresholded,
-    focal_loss,
+    hurdle_nll,
     trunc_nb_nll,
     weighted_smape_oof,
     weighted_smape_oof_thresholded,
@@ -50,11 +50,23 @@ def test_combine_predictions_thresholded_gate_behaviour():
     assert torch.allclose(soft, expected_soft)
 
 
+def test_hurdle_nll_matches_bce_with_logits():
+    """hurdle_nll should match BCE with logits for identical inputs."""
+    logits = torch.tensor([0.2, -0.3])
+    targets = torch.tensor([1.0, 0.0])
+    w = torch.tensor([1.0, 2.0])
+    expected = torch.nn.functional.binary_cross_entropy_with_logits(
+        logits, targets, weight=w
+    )
+    actual = hurdle_nll(logits, targets, w)
+    assert torch.allclose(actual, expected)
+
+
 def test_patchtst_exports_loss_helpers():
     """The patchtst package should expose utility functions for external use."""
     for fn in (
         trunc_nb_nll,
-        focal_loss,
+        hurdle_nll,
         combine_predictions,
         combine_predictions_thresholded,
         weighted_smape_oof,
