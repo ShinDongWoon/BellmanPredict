@@ -165,39 +165,22 @@ def trunc_nb_nll(y: Tensor, mu: Tensor, kappa: Tensor) -> Tensor:
     return -(log_pmf - log1m_p0)
 
 
-def focal_loss(
-    p: Tensor,
-    z: Tensor,
-    gamma: float,
-    alpha: float,
-    w: Optional[Tensor] = None,
-) -> Tensor:
-    r"""Binary focal loss for probability inputs.
+def hurdle_nll(logits: Tensor, z: Tensor, w: Optional[Tensor] = None) -> Tensor:
+    r"""Binary hurdle negative log-likelihood.
 
     Parameters
     ----------
-    p:
-        Predicted probabilities for the positive class.
+    logits:
+        Logits for the probability of observing a non-zero target.
     z:
-        Ground truth labels in ``{0, 1}``.
-    gamma:
-        Focusing parameter that reduces the relative loss for well-classified
-        examples.
-    alpha:
-        Balancing factor between positive and negative examples.
+        Ground truth indicators where ``1`` denotes a non-zero target.
     w:
         Optional sample weights applied before taking the mean.
     """
 
-    p = torch.clamp(p, min=1e-8, max=1 - 1e-8)
-    z = z.to(p.dtype)
-    log_p = torch.log(p)
-    log1m_p = torch.log1p(-p)
-
-    loss_pos = -alpha * torch.pow(1 - p, gamma) * z * log_p
-    loss_neg = -(1 - alpha) * torch.pow(p, gamma) * (1 - z) * log1m_p
-    loss = loss_pos + loss_neg
-
+    p0 = torch.sigmoid(-logits)
+    p0 = torch.clamp(p0, min=1e-8, max=1 - 1e-8)
+    loss = z * -torch.log1p(-p0) + (1 - z) * -torch.log(p0)
     if w is not None:
         loss = loss * w
     return loss.mean()

@@ -22,7 +22,7 @@ from LGHackerton.preprocess import Preprocessor, L as DEFAULT_L, H as DEFAULT_H
 from LGHackerton.preprocess.preprocess_pipeline_v1_1 import SALES_FILLED_COL
 from .train import (
     trunc_nb_nll,
-    focal_loss,
+    hurdle_nll,
     WeightedSMAPELoss,
     combine_predictions_thresholded,
 )
@@ -91,14 +91,8 @@ class PatchTSTParams:
         Early stopping patience measured in epochs.
     lambda_nb : float
         Weight for the negative binomial regression loss component.
-    lambda_clf : float
-        Weight for the classifier loss component.
     lambda_s : float
         Scaling applied to the sparsity regularisation term.
-    gamma : float
-        Gamma parameter for focal loss.
-    alpha : float
-        Alpha parameter for focal loss.
     tau : float
         Threshold applied to the classifier probability for gating.
     temp_start : float
@@ -148,10 +142,7 @@ class PatchTSTParams:
     max_epochs: int = 200
     patience: int = 20
     lambda_nb: float = 1.0
-    lambda_clf: float = 1.0
     lambda_s: float = 0.05
-    gamma: float = 2.0
-    alpha: float = 0.5
     tau: float = 0.5
     temp_start: float = 1.0
     temp_end: float = 0.05
@@ -732,7 +723,6 @@ class PatchTSTTrainer(BaseModel):
                     static_codes = static_codes.to(self.device, non_blocking=pin)
                     opt.zero_grad()
                     logits, mu_raw, kappa_raw = net(xb, sb, static_codes)
-                    prob = torch.sigmoid(logits)
                     mu = F.softplus(mu_raw) + 1e-6
                     kappa = F.softplus(kappa_raw) + 1e-6
                     y_raw = yb
@@ -753,7 +743,7 @@ class PatchTSTTrainer(BaseModel):
                         w = w * priority_w
                     nb_loss = trunc_nb_nll(y_raw, mu_unscaled, kappa)
                     L_nb = (nb_loss * w * z).sum() / torch.clamp(z.sum(), min=1.0)
-                    L_clf = focal_loss(prob, z, self.params.gamma, self.params.alpha, w)
+                    L_clf = hurdle_nll(logits, z, w)
                     y_hat = combine_predictions_thresholded(
                         logits=logits,
                         mu=mu_unscaled,
@@ -764,7 +754,7 @@ class PatchTSTTrainer(BaseModel):
                     L_s = smape_loss(y_hat, y_raw, w)
                     loss = (
                         self.params.lambda_nb * L_nb
-                        + self.params.lambda_clf * L_clf
+                        + L_clf
                         + self.params.lambda_s * L_s
                     )
                     loss.backward()
