@@ -39,7 +39,7 @@ PATCH_PARAMS = dict(
     d_model=128, n_heads=8, depth=4,
     patch_len=4, stride=1, dropout=0.1,
     id_embed_dim=16,
-    lr=1e-3, weight_decay=1e-4, batch_size=256,
+    lr=1e-3, weight_decay=1e-4, grad_clip=1.0, batch_size=256,
     max_epochs=200, patience=20,
     lambda_nb=1.0, lambda_s=0.05, lambda_smooth=0.0,
     tau=0.5,
