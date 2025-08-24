@@ -735,10 +735,12 @@ class PatchTSTTrainer(BaseModel):
                     if self.params.scaler == "revin":
                         y_raw = y_raw * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
                         mu_unscaled = mu * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
-                    M = (y_raw > 0)
+                    y_count = torch.sinh(y_raw)
+                    mu_count = torch.sinh(mu_unscaled)
+                    M = (y_count > 0)
                     z = M.float()
                     series_w = self.series_weight_tensor[sb]
-                    w = torch.where(M, series_w.unsqueeze(1), torch.ones_like(y_raw))
+                    w = torch.where(M, series_w.unsqueeze(1), torch.ones_like(y_count))
                     if cfg.use_weighted_loss:
                         outlets = [self.idx2id[int(i)].split("::")[0] for i in sb.cpu().tolist()]
                         priority_w = torch.tensor(
@@ -746,17 +748,17 @@ class PatchTSTTrainer(BaseModel):
                             device=self.device,
                         ).view(-1, 1)
                         w = w * priority_w
-                    nb_loss = trunc_nb_nll(y_raw, mu_unscaled, kappa)
+                    nb_loss = trunc_nb_nll(y_count, mu_count, kappa)
                     L_nb = (nb_loss * w * z).sum() / torch.clamp(z.sum(), min=1.0)
                     L_clf = hurdle_nll(logits, z, w)
                     y_hat = combine_predictions_thresholded(
                         logits=logits,
-                        mu=mu_unscaled,
+                        mu=mu_count,
                         kappa=kappa,
                         tau=self.params.tau,
                         temperature=curr_T,
                     )
-                    L_s = smape_loss(y_hat, y_raw, w)
+                    L_s = smape_loss(y_hat, y_count, w)
                     p = torch.sigmoid(logits)
                     L_sm = torch.mean(torch.abs(p[:, 1:] - p[:, :-1]))
                     loss = (
@@ -797,22 +799,24 @@ class PatchTSTTrainer(BaseModel):
                         if self.params.scaler == "revin":
                             mu_unscaled = mu * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
                             yb = yb * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
+                        yb_count = torch.sinh(yb)
+                        mu_count = torch.sinh(mu_unscaled)
                         _ = combine_predictions_thresholded(
                             logits=logits,
-                            mu=mu_unscaled,
+                            mu=mu_count,
                             kappa=kappa,
                             tau=self.params.tau,
                             temperature=curr_T,
                         )
                         final = combine_predictions_thresholded(
                             p=p,
-                            mu=mu_unscaled,
+                            mu=mu_count,
                             kappa=kappa,
                             tau=self.params.tau,
                             temperature=None,
                         )
                         P.append(final.cpu().numpy())
-                        T.append(yb.cpu().numpy())
+                        T.append(yb_count.cpu().numpy())
                         S.extend(sb.cpu().tolist())
                 y_pred = np.clip(np.concatenate(P, 0), 0, None)
                 y_true = np.concatenate(T, 0)
@@ -866,25 +870,27 @@ class PatchTSTTrainer(BaseModel):
                     if self.params.scaler == "revin":
                         mu_unscaled = mu * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
                         yb = yb * std_s.unsqueeze(1) + mu_s.unsqueeze(1)
+                    yb_count = torch.sinh(yb)
+                    mu_count = torch.sinh(mu_unscaled)
                     _ = combine_predictions_thresholded(
                         logits=logits,
-                        mu=mu_unscaled,
+                        mu=mu_count,
                         kappa=kappa,
                         tau=self.params.tau,
                         temperature=curr_T,
                     )
                     final = combine_predictions_thresholded(
                         p=p,
-                        mu=mu_unscaled,
+                        mu=mu_count,
                         kappa=kappa,
                         tau=self.params.tau,
                         temperature=None,
                     )
                     # record calibration tuples
                     logits_np = logits.cpu().numpy()
-                    mu_np = mu_unscaled.cpu().numpy()
+                    mu_np = mu_count.cpu().numpy()
                     kappa_np = kappa.cpu().numpy()
-                    y_np = yb.cpu().numpy()
+                    y_np = yb_count.cpu().numpy()
                     sid_list = [self.idx2id[int(i)] for i in sb.cpu().tolist()]
                     for idx_rec, sid in enumerate(sid_list):
                         for h in range(self.H):
@@ -966,6 +972,7 @@ class PatchTSTTrainer(BaseModel):
                 kappa = torch.stack([F.softplus(k) + 1e-6 for k in kappa_raw])
                 if self.params.scaler == "revin":
                     mu = mu * std_s.view(1, -1, 1) + mu_s.view(1, -1, 1)
+                mu = torch.sinh(mu)
                 out = combine_predictions_thresholded(
                     p=p,
                     mu=mu,
