@@ -478,6 +478,9 @@ class PatchTSTTrainer(BaseModel):
         # Channel index maps for dynamic/static features
         self.dynamic_idx_map: Dict[str, int] = {}
         self.static_idx_map: Dict[str, int] = {}
+        # calibration storage and calibrated tau
+        self.calib_records: List[Tuple[float, float, float, float, str, int]] = []
+        self.tau: float | torch.Tensor = self.params.tau
 
     def _ensure_torch(self):
         if not TORCH_OK: raise RuntimeError(f"PyTorch not available: {_TORCH_ERR}")
@@ -509,6 +512,8 @@ class PatchTSTTrainer(BaseModel):
         self._ensure_torch(); import torch
         os.makedirs(self.model_dir, exist_ok=True)
         self.oof_records = []
+        self.calib_records = []
+        self.calib_priority_weight = cfg.priority_weight
         order = np.argsort(label_dates)
         X_train = X_train[order]
         S_train = S_train[order]
@@ -843,9 +848,27 @@ class PatchTSTTrainer(BaseModel):
                         tau=self.params.tau,
                         temperature=None,
                     )
+                    # record calibration tuples
+                    logits_np = logits.cpu().numpy()
+                    mu_np = mu_unscaled.cpu().numpy()
+                    kappa_np = kappa.cpu().numpy()
+                    y_np = yb.cpu().numpy()
+                    sid_list = [self.idx2id[int(i)] for i in sb.cpu().tolist()]
+                    for idx_rec, sid in enumerate(sid_list):
+                        for h in range(self.H):
+                            self.calib_records.append(
+                                (
+                                    float(logits_np[idx_rec, h]),
+                                    float(mu_np[idx_rec, h]),
+                                    float(kappa_np[idx_rec, h]),
+                                    float(y_np[idx_rec, h]),
+                                    sid,
+                                    h + 1,
+                                )
+                            )
                     final = final.cpu()
                     P.append(final.numpy())
-                    Y.append(yb.cpu().numpy())
+                    Y.append(y_np)
                     S.extend(sb.cpu().tolist())
             y_pred = np.clip(np.concatenate(P, 0), 0, None)
             y_true = np.concatenate(Y, 0)
@@ -860,6 +883,8 @@ class PatchTSTTrainer(BaseModel):
             )
             self.oof_records.extend(oof_df.to_dict("records"))
             self.models.append(net)
+        # calibrate gating threshold using collected records
+        self.calibrate_tau()
         self.save(os.path.join(self.model_dir,"patchtst.pt"))
     def predict(
         self,
@@ -906,13 +931,12 @@ class PatchTSTTrainer(BaseModel):
                 kappa = torch.stack([F.softplus(k) + 1e-6 for k in kappa_raw])
                 if self.params.scaler == "revin":
                     mu = mu * std_s.view(1, -1, 1) + mu_s.view(1, -1, 1)
-                curr_T = 0.05
                 out = combine_predictions_thresholded(
                     logits=logits,
                     mu=mu,
                     kappa=kappa,
-                    tau=self.params.tau,
-                    temperature=curr_T,
+                    tau=self.tau,
+                    temperature=None,
                 ).mean(0)
                 outs.append(out.cpu().numpy())
         yhat = np.clip(np.concatenate(outs, 0), 0, None)
@@ -933,6 +957,72 @@ class PatchTSTTrainer(BaseModel):
         hs = np.tile(np.arange(1, self.H + 1), len(sids))
         out = pd.DataFrame({"series_id": reps, "h": hs, "yhat_patch": y_pred.reshape(-1)})
         return out
+
+    def calibrate_tau(
+        self,
+        tau_grid: Iterable[float] | None = None,
+        per_horizon: bool = False,
+    ) -> float | torch.Tensor:
+        """Calibrate gating threshold ``tau`` using stored validation outputs."""
+        self._ensure_torch(); import torch
+        if not self.calib_records:
+            self.tau = self.params.tau
+            return self.tau
+        if tau_grid is None:
+            tau_grid = np.linspace(0.05, 0.95, 19)
+        records = self.calib_records
+        logits = torch.tensor([r[0] for r in records], dtype=torch.float32)
+        mu = torch.tensor([r[1] for r in records], dtype=torch.float32)
+        kappa = torch.tensor([r[2] for r in records], dtype=torch.float32)
+        y_true = torch.tensor([r[3] for r in records], dtype=torch.float32)
+        series_ids = np.array([r[4] for r in records])
+        hs = np.array([r[5] for r in records], dtype=int)
+        outlets = np.array([sid.split("::")[0] for sid in series_ids])
+        priority = getattr(self, "calib_priority_weight", 1.0)
+
+        def _search(mask: np.ndarray) -> float:
+            best_tau = float(tau_grid[0])
+            best_score = float("inf")
+            lg = logits[mask]
+            mu_u = mu[mask]
+            kp = kappa[mask]
+            yt = y_true[mask]
+            outs = outlets[mask]
+            sids = series_ids[mask]
+            for t in tau_grid:
+                pred = combine_predictions_thresholded(
+                    logits=lg,
+                    mu=mu_u,
+                    kappa=kp,
+                    tau=float(t),
+                    temperature=None,
+                ).cpu().numpy()
+                score = weighted_smape_np(
+                    yt.cpu().numpy(),
+                    pred,
+                    outs,
+                    priority,
+                    1e-8,
+                    series_weight_map=self.series_weight_map,
+                    series_ids=sids,
+                )
+                if score < best_score:
+                    best_score = score
+                    best_tau = float(t)
+            return best_tau
+
+        if per_horizon:
+            taus = []
+            for h in range(1, self.H + 1):
+                mask = hs == h
+                if mask.any():
+                    taus.append(_search(mask))
+                else:
+                    taus.append(self.params.tau)
+            self.tau = torch.tensor(taus, dtype=torch.float32)
+        else:
+            self.tau = _search(np.ones_like(hs, dtype=bool))
+        return self.tau
 
     def get_oof(self) -> pd.DataFrame:
         return pd.DataFrame(self.oof_records)
@@ -955,6 +1045,7 @@ class PatchTSTTrainer(BaseModel):
             "patch_dynamic_idx": self.dynamic_idx_map,
             "patch_static_idx": self.static_idx_map,
             "static_cardinalities": self.params.static_cardinalities,
+            "tau": self.tau.tolist() if isinstance(self.tau, torch.Tensor) else self.tau,
         }
         with open(path.replace(".pt", ".json"), "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
@@ -977,11 +1068,17 @@ class PatchTSTTrainer(BaseModel):
                 self.id2idx=m.get("id2idx",{})
                 self.dynamic_idx_map=m.get("patch_dynamic_idx",{})
                 self.static_idx_map=m.get("patch_static_idx",{})
+                tau_meta = m.get("tau", self.params.tau)
+                if isinstance(tau_meta, list):
+                    self.tau = torch.tensor(tau_meta, dtype=torch.float32)
+                else:
+                    self.tau = float(tau_meta)
         else:
             index=[]
             self.id2idx={}
             self.dynamic_idx_map={}
             self.static_idx_map={}
+            self.tau = self.params.tau
         self.idx2id=[None]*len(self.id2idx)
         for sid,idx in self.id2idx.items():
             self.idx2id[int(idx)] = sid
