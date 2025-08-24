@@ -2,6 +2,7 @@ import pathlib
 import sys
 
 import torch
+import pytest
 
 # Add project root to sys.path for module imports
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
@@ -73,3 +74,12 @@ def test_patchtst_exports_loss_helpers():
         weighted_smape_oof_thresholded,
     ):
         assert callable(fn)
+
+
+def test_trunc_nb_nll_requires_strictly_positive_targets():
+    """trunc_nb_nll should raise if any target is non-positive."""
+    y = torch.tensor([1.0, 0.0])
+    mu = torch.tensor([0.3, 0.5])
+    kappa = torch.tensor([1.0, 2.0])
+    with pytest.raises(ValueError, match="trunc_nb_nll requires y > 0"):
+        trunc_nb_nll(y, mu, kappa)
