@@ -28,10 +28,25 @@ from .train import (
 )
 
 
-def linear_anneal(epoch: int, max_epochs: int, min_value: float = 0.0) -> float:
-    """Linearly anneal from 1.0 towards ``min_value`` over ``max_epochs``."""
-    frac = float(epoch) / float(max_epochs)
-    return 1.0 - (1.0 - min_value) * frac
+def temperature_schedule(
+    epoch: int,
+    max_epochs: int,
+    start: float,
+    end: float,
+    anneal_epochs: int,
+) -> float:
+    """Linearly anneal a value from ``start`` to ``end``.
+
+    The value is decayed from ``start`` to ``end`` over
+    ``max_epochs - anneal_epochs`` steps and then held constant
+    for the remaining ``anneal_epochs`` epochs.
+    """
+
+    span = max(1, max_epochs - anneal_epochs)
+    if epoch >= span:
+        return end
+    frac = float(epoch) / float(span)
+    return start + (end - start) * frac
 
 @dataclass
 class PatchTSTParams:
@@ -86,6 +101,12 @@ class PatchTSTParams:
         Alpha parameter for focal loss.
     tau : float
         Threshold applied to the classifier probability for gating.
+    temp_start : float
+        Initial temperature for the gating schedule.
+    temp_end : float
+        Final temperature after annealing.
+    temp_anneal_epochs : int
+        Number of final epochs to keep ``temp_end`` constant.
     scaler : str
         Scaling strategy ("per_series" or "revin").
     channel_fusion : str
@@ -132,6 +153,9 @@ class PatchTSTParams:
     gamma: float = 2.0
     alpha: float = 0.5
     tau: float = 0.5
+    temp_start: float = 1.0
+    temp_end: float = 0.05
+    temp_anneal_epochs: int = 5
     scaler: str = "per_series"
     channel_fusion: str = "attention"
     num_workers: int = 0
@@ -689,7 +713,13 @@ class PatchTSTTrainer(BaseModel):
             smape_loss = WeightedSMAPELoss(reduction="mean")
             best=float("inf"); best_state=None; bad=0
             for ep in range(self.params.max_epochs):
-                curr_T = max(linear_anneal(ep, self.params.max_epochs, 0.05), 0.05)
+                curr_T = temperature_schedule(
+                    ep,
+                    self.params.max_epochs,
+                    self.params.temp_start,
+                    self.params.temp_end,
+                    self.params.temp_anneal_epochs,
+                )
                 net.train()
                 nb_sum = clf_sum = s_sum = 0.0
                 batch_count = 0
@@ -1083,6 +1113,7 @@ class PatchTSTTrainer(BaseModel):
         for sid,idx in self.id2idx.items():
             self.idx2id[int(idx)] = sid
         self.params = PatchTSTParams(**self.model_params)
+        self.model_params = asdict(self.params)
         self.models=[]
         for fname in index:
             net = PatchTSTNet(
