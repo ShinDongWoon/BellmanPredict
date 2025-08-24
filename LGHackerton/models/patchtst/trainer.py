@@ -723,6 +723,7 @@ class PatchTSTTrainer(BaseModel):
                     static_codes = static_codes.to(self.device, non_blocking=pin)
                     opt.zero_grad()
                     logits, mu_raw, kappa_raw = net(xb, sb, static_codes)
+                    p = torch.sigmoid(logits)
                     mu = F.softplus(mu_raw) + 1e-6
                     kappa = F.softplus(kappa_raw) + 1e-6
                     y_raw = yb
@@ -780,6 +781,7 @@ class PatchTSTTrainer(BaseModel):
                         std_s = std_s.to(self.device, non_blocking=pin)
                         static_codes = static_codes.to(self.device, non_blocking=pin)
                         logits, mu_raw, kappa_raw = net(xb, sb, static_codes)
+                        p = torch.sigmoid(logits)
                         mu = F.softplus(mu_raw) + 1e-6
                         kappa = F.softplus(kappa_raw) + 1e-6
                         mu_unscaled = mu
@@ -794,7 +796,7 @@ class PatchTSTTrainer(BaseModel):
                             temperature=curr_T,
                         )
                         final = combine_predictions_thresholded(
-                            logits=logits,
+                            p=p,
                             mu=mu_unscaled,
                             kappa=kappa,
                             tau=self.params.tau,
@@ -848,6 +850,7 @@ class PatchTSTTrainer(BaseModel):
                     std_s = std_s.to(self.device, non_blocking=pin)
                     static_codes = static_codes.to(self.device, non_blocking=pin)
                     logits, mu_raw, kappa_raw = net(xb, sb, static_codes)
+                    p = torch.sigmoid(logits)
                     mu = F.softplus(mu_raw) + 1e-6
                     kappa = F.softplus(kappa_raw) + 1e-6
                     mu_unscaled = mu
@@ -862,7 +865,7 @@ class PatchTSTTrainer(BaseModel):
                         temperature=curr_T,
                     )
                     final = combine_predictions_thresholded(
-                        logits=logits,
+                        p=p,
                         mu=mu_unscaled,
                         kappa=kappa,
                         tau=self.params.tau,
@@ -949,12 +952,13 @@ class PatchTSTTrainer(BaseModel):
                 preds = [m(xb, sb, static_codes) for m in self.models]
                 logits, mu_raw, kappa_raw = zip(*preds)
                 logits = torch.stack(logits)
+                p = torch.sigmoid(logits)
                 mu = torch.stack([F.softplus(m) + 1e-6 for m in mu_raw])
                 kappa = torch.stack([F.softplus(k) + 1e-6 for k in kappa_raw])
                 if self.params.scaler == "revin":
                     mu = mu * std_s.view(1, -1, 1) + mu_s.view(1, -1, 1)
                 out = combine_predictions_thresholded(
-                    logits=logits,
+                    p=p,
                     mu=mu,
                     kappa=kappa,
                     tau=self.tau,
@@ -1011,9 +1015,10 @@ class PatchTSTTrainer(BaseModel):
             yt = y_true[mask]
             outs = outlets[mask]
             sids = series_ids[mask]
+            p = torch.sigmoid(lg)
             for t in tau_grid:
                 pred = combine_predictions_thresholded(
-                    logits=lg,
+                    p=p,
                     mu=mu_u,
                     kappa=kp,
                     tau=float(t),
