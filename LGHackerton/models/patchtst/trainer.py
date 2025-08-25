@@ -1111,7 +1111,6 @@ class PatchTSTTrainer(BaseModel):
     def predict_df(self, eval_df):
         """Return conditional-mean prediction dataframe for PatchTST."""
         X_eval, S_eval, M_eval, sids, *rest = eval_df
-        groups = rest[0] if rest else None
         sid_idx = np.array([self.id2idx.get(sid, 0) for sid in sids])
         y_pred = self.predict(
             X_eval,
@@ -1120,7 +1119,6 @@ class PatchTSTTrainer(BaseModel):
             sid_idx,
             dyn_idx=self.dynamic_idx_map,
             static_idx=self.static_idx_map,
-            groups=groups,
         )
         reps = np.repeat(sids, self.H)
         hs = np.tile(np.arange(1, self.H + 1), len(sids))

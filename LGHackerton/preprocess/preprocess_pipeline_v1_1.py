@@ -1,7 +1,7 @@
 """
 Preprocessing Pipeline v1.1 (AI Execution Ready)
 D&O 곤지암 리조트 식음업장 수요예측 해커톤
-- Strict 28-day lookback
+- Strict lookback window (28 days by default, configurable)
 - Sample isolation
 - No external network or dynamic installs
 - Optional Korean holidays provider, with safe fallback
@@ -444,10 +444,14 @@ class MissingAndOutlierHandler:
 
 class StrictFeatureMaker:
     """
-    Strict features computed only from past values within max window size L=28.
-    - lags: 1..(2*H) plus longer-term anchors
-    - rolling stats on shifted series
-    - intermittent-demand markers
+    Strict features computed only from past values within max window size.
+    Defaults to ``28`` days but can gracefully fall back to a shorter
+    ``lookback`` (e.g. ``14``) when full history is unavailable.
+
+    Parameters
+    ----------
+    lookback:
+        Maximum number of past days guaranteed for feature construction.
     """
 
     def __init__(self, lookback: int = L):
@@ -460,33 +464,41 @@ class StrictFeatureMaker:
         # Shift base for rolling
         s_shift = gb[SALES_FILLED_COL].shift(1)
 
-        # Lags up to 2*H plus anchors to preserve 28-day history
-        lags = list(range(1, 2 * H + 1)) + [21, 27, 28]
+        # Lags up to max(2*H, lookback) plus longer-term anchors within range
+        max_lag = max(2 * H, self.lookback)
+        anchors = [a for a in (21, 27, 28) if a <= self.lookback]
+        lags = list(range(1, max_lag + 1)) + anchors
         for lag in sorted(set(lags)):
             d[f"lag_{lag}"] = gb[SALES_FILLED_COL].shift(lag)
         vprint("[Strict] lag features done")
 
-        # Rolling on shifted
+        # Rolling on shifted - windows only up to available lookback
         def roll_feat(series: pd.Series, window: int, func: str):
             return series.rolling(window=window, min_periods=1).agg(func)
 
-        d["roll_mean_7"] = roll_feat(s_shift, 7, "mean")
-        d["roll_mean_14"] = roll_feat(s_shift, 14, "mean")
-        d["roll_mean_28"] = roll_feat(s_shift, 28, "mean")
-        d["roll_std_7"] = roll_feat(s_shift, 7, "std")
-        d["roll_std_28"] = roll_feat(s_shift, 28, "std")
-        d["roll_min_7"] = roll_feat(s_shift, 7, "min")
-        d["roll_max_7"] = roll_feat(s_shift, 7, "max")
+        if self.lookback >= 7:
+            d["roll_mean_7"] = roll_feat(s_shift, 7, "mean")
+            d["roll_std_7"] = roll_feat(s_shift, 7, "std")
+            d["roll_min_7"] = roll_feat(s_shift, 7, "min")
+            d["roll_max_7"] = roll_feat(s_shift, 7, "max")
+        if self.lookback >= 14:
+            d["roll_mean_14"] = roll_feat(s_shift, 14, "mean")
+        if self.lookback >= 28:
+            d["roll_mean_28"] = roll_feat(s_shift, 28, "mean")
+            d["roll_std_28"] = roll_feat(s_shift, 28, "std")
 
         # Intermittency features
-        is_zero = (d[SALES_FILLED_COL] == 0).astype(np.int8)
-        d["zero_ratio_28"] = gb[SALES_FILLED_COL].apply(
-            lambda s: (s == 0).astype(np.int8).rolling(28, min_periods=1).mean()
-        ).reset_index(level=0, drop=True)
-        # Longer-horizon intermittency summaries
-        d["zero_ratio_84"] = gb[SALES_FILLED_COL].apply(
-            lambda s: (s == 0).astype(np.int8).rolling(84, min_periods=1).mean()
-        ).reset_index(level=0, drop=True)
+        if self.lookback >= 28:
+            d["zero_ratio_28"] = gb[SALES_FILLED_COL].apply(
+                lambda s: (s == 0).astype(np.int8).rolling(28, min_periods=1).mean()
+            ).reset_index(level=0, drop=True)
+            d["zero_ratio_84"] = gb[SALES_FILLED_COL].apply(
+                lambda s: (s == 0).astype(np.int8).rolling(84, min_periods=1).mean()
+            ).reset_index(level=0, drop=True)
+        else:
+            d[f"zero_ratio_{self.lookback}"] = gb[SALES_FILLED_COL].apply(
+                lambda s: (s == 0).astype(np.int8).rolling(self.lookback, min_periods=1).mean()
+            ).reset_index(level=0, drop=True)
 
         # days_since_last_sale
         def days_since_last_sale(arr: np.ndarray) -> np.ndarray:
@@ -495,10 +507,9 @@ class StrictFeatureMaker:
             for i, v in enumerate(arr):
                 if v > 0:
                     last = i
-                res[i] = min(28 + 1, i - last)  # cap at 29
+                res[i] = min(self.lookback + 1, i - last)
             return res
 
-        # Use explicit index alignment to avoid misalignment-induced NaNs
         d["days_since_last_sale"] = gb[SALES_FILLED_COL].transform(
             lambda s: pd.Series(days_since_last_sale(s.values), index=s.index)
         )
@@ -518,9 +529,10 @@ class StrictFeatureMaker:
         d["zero_run_len"] = gb[SALES_FILLED_COL].transform(
             lambda s: pd.Series(zero_run_len(s.values), index=s.index)
         )
-        d["zero_run_max_84"] = gb["zero_run_len"].transform(
-            lambda s: s.rolling(84, min_periods=1).max()
-        )
+        if self.lookback >= 84:
+            d["zero_run_max_84"] = gb["zero_run_len"].transform(
+                lambda s: s.rolling(84, min_periods=1).max()
+            )
         vprint(f"[Strict] rolling+intermittency done  rows={len(d)}")
 
         return d
@@ -612,7 +624,7 @@ class SampleWindowizer:
     Build LGBM direct-prediction dataset and PatchTST tensors from fully-featured panel.
     - For LGBM: one row per origin-date per horizon h in {1..7}. Features at time t, target y at t+h.
     - For Eval: produce 7 rows per series at last available date.
-    - For PatchTST: X windows of shape (28, 1) and y of shape (7,)
+    - For PatchTST: X windows of shape ``(lookback, 1)`` and ``y`` of shape ``(H,)``
     """
 
     def __init__(
@@ -633,7 +645,7 @@ class SampleWindowizer:
         """Vectorized construction of the direct-forecast dataset for LGBM.
 
         For each horizon ``h`` in ``{1..H}`` the target ``y_h`` is generated via
-        a grouped forward shift. Rows lacking a full 28-day lookback are
+        a grouped forward shift. Rows lacking a full ``lookback``-day history are
         discarded, the target columns are unpivoted into a long format and the
         temporary ``y_h`` columns removed.
         """
@@ -641,13 +653,24 @@ class SampleWindowizer:
             self.guard.assert_scope({"train"})
 
         d = df.sort_values([SERIES_COL, DATE_COL]).copy()
-        # Need at least lag_28 available to respect 28-day features
-        if "lag_28" in d.columns:
-            lag_col = "lag_28"
-        elif "lag_27" in d.columns:
-            lag_col = "lag_27"
-        else:
-            raise ValueError("Strict features required before building LGBM train set.")
+        # Determine the required lag column based on available history
+        lag_candidates = [f"lag_{self.L}", f"lag_{self.L - 1}"]
+        lag_col = None
+        for c in lag_candidates:
+            if c in d.columns:
+                lag_col = c
+                break
+        if lag_col is None:
+            # fall back to the largest available lag if provided
+            existing = sorted(
+                [int(c.split("_")[1]) for c in d.columns if c.startswith("lag_")]
+            )
+            if existing:
+                lag_col = f"lag_{existing[-1]}"
+            else:
+                raise ValueError(
+                    "Strict features required before building LGBM train set."
+                )
 
         # Track categorical feature indices (currently none; `dow` removed earlier)
         self.cat_indices = {}
@@ -662,7 +685,7 @@ class SampleWindowizer:
                 d[c] = d[c].astype("float32")
 
         # --- Filter base rows once --------------------------------------------------------
-        # Require full lookback history for all features
+        # Require sufficient lookback history for all features
         base = d[d[lag_col].notna()]
         base = base.dropna(
             subset=[f"y_{h}" for h in range(1, self.H + 1)], how="all"
@@ -705,9 +728,16 @@ class SampleWindowizer:
             if len(g) == 0:
                 continue
             t = len(g) - 1  # last date
-            if pd.isna(g.loc[t, "lag_27"]):
+            lag_check_col = None
+            for c in [f"lag_{self.L - 1}", f"lag_{self.L}"]:
+                if c in g.columns:
+                    lag_check_col = c
+                    break
+            if lag_check_col is None or pd.isna(g.loc[t, lag_check_col]):
                 # Not enough lookback provided in eval sample
-                warn(f"Eval series {sid}: insufficient lookback for strict features.")
+                warn(
+                    f"Eval series {sid}: insufficient lookback for strict features."
+                )
                 continue
             base = {
                 SERIES_COL: sid,
@@ -908,6 +938,7 @@ class PreprocessorArtifacts:
     scaler_mean: Optional[pd.Series] = None
     scaler_std: Optional[pd.Series] = None
     var_threshold: float = 0.0
+    lookback: int = L
 
 
 class Preprocessor:
@@ -929,16 +960,18 @@ class Preprocessor:
         show_progress: bool = False,
         scale: bool = False,
         var_threshold: float = 0.0,
+        lookback: int = L,
     ):
         self.guard = LeakGuard()
         self.schema = SchemaNormalizer()
         self.cont_fix = DateContinuityFixer()
         self.calendar = CalendarFeatureMaker(cyclical=cyclical)
         self.missing_outlier = MissingAndOutlierHandler()
-        self.strict_feats = StrictFeatureMaker()
+        self.strict_feats = StrictFeatureMaker(lookback=lookback)
         self.rich = RichLookupBuilder()
         self.encoder = Encoder()
-        self.windowizer = SampleWindowizer(guard=self.guard)
+        self.windowizer = SampleWindowizer(lookback=lookback, guard=self.guard)
+        self.lookback = lookback
         self.feature_cols: List[str] = []
         self.low_var_cols: List[str] = []
         self.low_var_stats: Dict[str, float] = {}
@@ -1220,6 +1253,7 @@ class Preprocessor:
             scaler_mean=self.scaler_mean,
             scaler_std=self.scaler_std,
             var_threshold=self.var_threshold,
+            lookback=self.lookback,
         )
         with open(path, "wb") as f:
             pickle.dump(artifacts, f)
@@ -1244,11 +1278,12 @@ class Preprocessor:
         self.scaler_mean = art.scaler_mean
         self.scaler_std = art.scaler_std
         self.var_threshold = art.var_threshold
+        self.lookback = art.lookback
         self._compute_patch_features()
         # re-wire
         self.cont_fix = DateContinuityFixer()
-        self.strict_feats = StrictFeatureMaker()
-        self.windowizer = SampleWindowizer(guard=self.guard)
+        self.strict_feats = StrictFeatureMaker(lookback=self.lookback)
+        self.windowizer = SampleWindowizer(lookback=self.lookback, guard=self.guard)
 
     # --------------------------
     # Helpers
