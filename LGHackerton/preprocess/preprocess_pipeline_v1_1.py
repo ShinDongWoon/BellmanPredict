@@ -903,6 +903,11 @@ class PreprocessorArtifacts:
     static_feature_cols: List[str]
     dynamic_feature_cols: List[str]
     summary_feature_cols: List[str]
+    low_var_stats: Dict[str, float] = field(default_factory=dict)
+    scale: bool = False
+    scaler_mean: Optional[pd.Series] = None
+    scaler_std: Optional[pd.Series] = None
+    var_threshold: float = 0.0
 
 
 class Preprocessor:
@@ -917,7 +922,14 @@ class Preprocessor:
     remain.
     """
 
-    def __init__(self, *, cyclical: bool = True, show_progress: bool = False):
+    def __init__(
+        self,
+        *,
+        cyclical: bool = True,
+        show_progress: bool = False,
+        scale: bool = False,
+        var_threshold: float = 0.0,
+    ):
         self.guard = LeakGuard()
         self.schema = SchemaNormalizer()
         self.cont_fix = DateContinuityFixer()
@@ -929,6 +941,7 @@ class Preprocessor:
         self.windowizer = SampleWindowizer(guard=self.guard)
         self.feature_cols: List[str] = []
         self.low_var_cols: List[str] = []
+        self.low_var_stats: Dict[str, float] = {}
         self.static_cols: List[str] = []
         # Feature column subsets for PatchTST
         self.static_feature_cols: List[str] = []
@@ -940,6 +953,11 @@ class Preprocessor:
         # Channel index maps produced by the windowizer
         self.patch_dynamic_idx: Dict[str, int] = {}
         self.patch_static_idx: Dict[str, int] = {}
+        # Scaling
+        self.scale = scale
+        self.scaler_mean: Optional[pd.Series] = None
+        self.scaler_std: Optional[pd.Series] = None
+        self.var_threshold = var_threshold
         self.show_progress = show_progress
 
     def _compute_patch_features(self, df: Optional[pd.DataFrame] = None):
@@ -1012,11 +1030,19 @@ class Preprocessor:
             return self.encoder.transform(df)
 
         def _drop_low_var(df: pd.DataFrame) -> pd.DataFrame:
-            self.low_var_cols = [c for c in df.columns if df[c].nunique() <= 1]
+            num_cols = df.select_dtypes(include=[np.number]).columns
+            var_series = df[num_cols].var()
+            logging.info("Variance stats: %s", var_series.to_dict())
+            low_var_num = var_series[var_series < self.var_threshold]
+            non_num_cols = [c for c in df.columns if c not in num_cols]
+            low_var_non = [c for c in non_num_cols if df[c].nunique() <= 1]
+            self.low_var_stats = low_var_num.to_dict()
+            self.low_var_cols = list(low_var_num.index) + low_var_non
             if self.low_var_cols:
                 logging.warning(
-                    "Dropping %d low variance columns: %s",
+                    "Dropping %d low variance columns (threshold=%s): %s",
                     len(self.low_var_cols),
+                    self.var_threshold,
                     self.low_var_cols,
                 )
                 df = df.drop(columns=self.low_var_cols)
@@ -1047,6 +1073,15 @@ class Preprocessor:
             )
             return df
 
+        def _scale_features(df: pd.DataFrame) -> pd.DataFrame:
+            if not self.scale:
+                return df
+            cols = [c for c in self.feature_cols if c in df.columns]
+            self.scaler_mean = df[cols].mean()
+            self.scaler_std = df[cols].std().replace(0, 1)
+            df[cols] = (df[cols] - self.scaler_mean[cols]) / self.scaler_std[cols]
+            return df
+
         steps = [
             ("schema", _schema),
             ("continuity", _continuity),
@@ -1059,6 +1094,7 @@ class Preprocessor:
             ("drop_low_var", _drop_low_var),
             ("feature_cols", _feature_cols),
             ("patch_features", self._compute_patch_features),
+            ("scale_features", _scale_features),
         ]
 
         df = df_raw
@@ -1085,6 +1121,13 @@ class Preprocessor:
                 else df
             )
 
+        def _scale_features(df: pd.DataFrame) -> pd.DataFrame:
+            if not self.scale or self.scaler_mean is None or self.scaler_std is None:
+                return df
+            cols = [c for c in self.feature_cols if c in df.columns]
+            df[cols] = (df[cols] - self.scaler_mean[cols]) / self.scaler_std[cols]
+            return df
+
         steps = [
             ("schema", lambda df: self.schema.transform(df, allow_new=False)),
             ("continuity", self.cont_fix.transform),
@@ -1098,6 +1141,7 @@ class Preprocessor:
                 "drop_low_var",
                 lambda df: df.drop(columns=self.low_var_cols, errors="ignore"),
             ),
+            ("scale_features", _scale_features),
         ]
 
         df = df_eval_raw
@@ -1167,10 +1211,15 @@ class Preprocessor:
             leak_guard=self.guard,
             feature_cols=self.feature_cols,
             low_var_cols=self.low_var_cols,
+            low_var_stats=self.low_var_stats,
             static_cols=self.static_cols,
             static_feature_cols=self.static_feature_cols,
             dynamic_feature_cols=self.dynamic_feature_cols,
             summary_feature_cols=self.summary_feature_cols,
+            scale=self.scale,
+            scaler_mean=self.scaler_mean,
+            scaler_std=self.scaler_std,
+            var_threshold=self.var_threshold,
         )
         with open(path, "wb") as f:
             pickle.dump(artifacts, f)
@@ -1186,10 +1235,15 @@ class Preprocessor:
         self.guard = art.leak_guard
         self.feature_cols = art.feature_cols
         self.low_var_cols = art.low_var_cols
+        self.low_var_stats = art.low_var_stats
         self.static_cols = art.static_cols
         self.static_feature_cols = art.static_feature_cols
         self.dynamic_feature_cols = art.dynamic_feature_cols
         self.summary_feature_cols = art.summary_feature_cols
+        self.scale = art.scale
+        self.scaler_mean = art.scaler_mean
+        self.scaler_std = art.scaler_std
+        self.var_threshold = art.var_threshold
         self._compute_patch_features()
         # re-wire
         self.cont_fix = DateContinuityFixer()
