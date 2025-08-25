@@ -22,9 +22,9 @@ class TrainConfig:
     rocv_n_folds:int=3               # rolling-origin CV folds
     rocv_stride_days:int=7           # step between ROCV folds
     rocv_val_span_days:int=7         # validation span for each ROCV fold
-    purge_days:int=0                 # explicit purge gap (0 -> derive from purge_mode)
-    min_val_samples:int=28           # minimum validation samples per fold
-    purge_mode:str="L"               # fallback for legacy behaviour
+    purge_days:int=14                # explicit purge gap between train/val in days
+    min_val_samples:int=28           # minimum samples required for train/val splits
+    purge_mode:str="L"               # legacy fallback when purge_days <= 0
     input_lens: List[int] | None = None
     n_trials:int=20
     timeout:int|None=None
