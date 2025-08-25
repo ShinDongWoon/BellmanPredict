@@ -150,6 +150,7 @@ class LGBMTrainer(BaseModel):
         df = df_train.copy()
         df["label_date"] = self._compute_label_date(df, "date", "h")
         self.oof_records = []
+        rng = np.random.default_rng(getattr(cfg, "seed", None))
 
         for h in range(1, 8):
             dfh = df[df["h"] == h].reset_index(drop=True)
@@ -187,26 +188,48 @@ class LGBMTrainer(BaseModel):
                 y_va = y[va_mask]
                 z_tr, z_va = z[tr_mask], z[va_mask]
                 w_tr, w_va = w[tr_mask], w[va_mask]
+                # keep original validation data for OOF predictions before any upsampling
+                X_va_orig = X_va.copy()
+                y_va_orig = y_va.copy()
 
                 n_tr = X_tr.shape[0]
                 pos_tr = int(z_tr.sum())
                 pos_va = int(z_va.sum())
 
                 if pos_tr == 0 or pos_va == 0:
-                    logging.warning(f"h{h} fold{i}: no positive samples; skipping")
-                    oof_df = dfh.loc[va_mask, ["series_id", "h"]].copy()
-                    oof_df["y"] = y_va
-                    oof_df["prob"] = 0.0
-                    oof_df["reg_pred"] = 0.0
-                    oof_df["yhat"] = 0.0
-                    self.oof_records.extend(oof_df.to_dict("records"))
-                    continue
+                    pos_idx_all = np.where(z > 0)[0]
+                    if pos_idx_all.size == 0:
+                        logging.warning(f"h{h} fold{i}: no positive samples in dataset; skipping")
+                        oof_df = dfh.loc[va_mask, ["series_id", "h"]].copy()
+                        oof_df["y"] = y_va_orig
+                        oof_df["prob"] = 0.0
+                        oof_df["reg_pred"] = 0.0
+                        oof_df["yhat"] = 0.0
+                        self.oof_records.extend(oof_df.to_dict("records"))
+                        continue
+                    logging.warning(f"h{h} fold{i}: no positive samples; applying upsampling")
+                    if pos_tr == 0:
+                        sample_idx = rng.choice(pos_idx_all, size=1)
+                        X_tr = np.vstack([X_tr, X[sample_idx]])
+                        y_tr_f = np.concatenate([y_tr_f, y_tr[sample_idx]])
+                        z_tr = np.concatenate([z_tr, z[sample_idx]])
+                        w_tr = np.concatenate([w_tr, w[sample_idx]])
+                        n_tr = X_tr.shape[0]
+                        pos_tr = int(z_tr.sum())
+                    if pos_va == 0:
+                        sample_idx = rng.choice(pos_idx_all, size=1)
+                        X_va = np.vstack([X_va, X[sample_idx]])
+                        y_va_f = np.concatenate([y_va_f, y_tr[sample_idx]])
+                        y_va = np.concatenate([y_va, y[sample_idx]])
+                        z_va = np.concatenate([z_va, z[sample_idx]])
+                        w_va = np.concatenate([w_va, w[sample_idx]])
+                        pos_va = int(z_va.sum())
 
                 min_leaf_clf = min_leaf_reg = self.params.min_data_in_leaf
                 if n_tr < 2:
                     logging.warning(f"h{h} fold{i}: only {n_tr} training samples; skipping")
                     oof_df = dfh.loc[va_mask, ["series_id", "h"]].copy()
-                    oof_df["y"] = y_va
+                    oof_df["y"] = y_va_orig
                     oof_df["prob"] = 0.0
                     oof_df["reg_pred"] = 0.0
                     oof_df["yhat"] = 0.0
@@ -224,7 +247,7 @@ class LGBMTrainer(BaseModel):
                             f"h{h} fold{i}: only {pos_tr} positive samples; skipping"
                         )
                         oof_df = dfh.loc[va_mask, ["series_id", "h"]].copy()
-                        oof_df["y"] = y_va
+                        oof_df["y"] = y_va_orig
                         oof_df["prob"] = 0.0
                         oof_df["reg_pred"] = 0.0
                         oof_df["yhat"] = 0.0
@@ -338,14 +361,14 @@ class LGBMTrainer(BaseModel):
                     self.models[h]["reg"].append(reg_booster)
 
                     # OOF prediction for this fold
-                    prob = clf_booster.predict(X_va, num_iteration=clf_booster.best_iteration)
-                    reg_pred = reg_booster.predict(X_va, num_iteration=reg_booster.best_iteration)
+                    prob = clf_booster.predict(X_va_orig, num_iteration=clf_booster.best_iteration)
+                    reg_pred = reg_booster.predict(X_va_orig, num_iteration=reg_booster.best_iteration)
                     if cfg.use_asinh_target:
                         reg_pred = np.sinh(reg_pred)
                     reg_pred = np.clip(reg_pred, 0.0, None)
                     yhat = np.clip(prob * reg_pred, 0.0, None)
                     oof_df = dfh.loc[va_mask, ["series_id", "h"]].copy()
-                    oof_df["y"] = y_va
+                    oof_df["y"] = y_va_orig
                     oof_df["prob"] = prob
                     oof_df["reg_pred"] = reg_pred
                     oof_df["yhat"] = yhat
@@ -392,12 +415,12 @@ class LGBMTrainer(BaseModel):
                     self.models[h]["reg"].append(booster)
 
                     # OOF prediction for this fold
-                    yhat = booster.predict(X_va, num_iteration=booster.best_iteration)
+                    yhat = booster.predict(X_va_orig, num_iteration=booster.best_iteration)
                     if cfg.use_asinh_target:
                         yhat = np.sinh(yhat)
                     yhat = np.clip(yhat, 0.0, None)
                     oof_df = dfh.loc[va_mask, ["series_id", "h"]].copy()
-                    oof_df["y"] = y_va
+                    oof_df["y"] = y_va_orig
                     oof_df["yhat"] = yhat
                     self.oof_records.extend(oof_df.to_dict("records"))
 
