@@ -86,16 +86,20 @@ class LGBMTrainer(BaseModel):
         folds: List[Tuple[np.ndarray, np.ndarray]] = []
         if len(dates) == 0:
             return folds
-        purge_days = cfg.purge_days if getattr(cfg, "purge_days", 0) > 0 else (L + H if cfg.purge_mode == "L+H" else L)
-        purge = np.timedelta64(purge_days, 'D')
-        for i in range(cfg.n_folds):
-            end = dates[-1] - np.timedelta64(i * cfg.cv_stride, 'D')
-            start = end - np.timedelta64(cfg.cv_stride - 1, 'D')
+        purge_days = cfg.purge_days if getattr(cfg, "purge_days", 0) > 0 else 14
+        purge = np.timedelta64(purge_days, "D")
+        end_idx = len(dates) - 1
+        while len(folds) < cfg.n_folds and end_idx >= 0:
+            end = dates[end_idx]
+            start = end - np.timedelta64(cfg.cv_stride - 1, "D")
+            if start < dates[0]:
+                break
             val_mask = (df_h[date_col] >= start) & (df_h[date_col] <= end)
             train_mask = df_h[date_col] < (start - purge)
-            if val_mask.sum() > 0 and train_mask.sum() > 0:
+            if val_mask.sum() >= cfg.min_val_samples and train_mask.sum() >= cfg.min_val_samples:
                 assert df_h.loc[train_mask, date_col].max() < df_h.loc[val_mask, date_col].min() - np.timedelta64(purge_days, "D")
                 folds.append((train_mask.values, val_mask.values))
+            end_idx -= cfg.cv_stride
         assert folds, "No valid folds generated"
         return folds
 
