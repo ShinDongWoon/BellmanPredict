@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "LGHackerton"
+version = "0.1.0"
+description = "Demand forecasting pipeline for D&O Gonjiam"
+authors = [{name="Your Name", email="you@example.com"}]
+dependencies = [
+    "numpy>=1.23",
+    "pandas>=1.5",
+    "lightgbm>=3.3",
+    "torch>=1.13; extra == 'torch'",      # optional GPU/NN support
+    "holidayskr>=0.2; extra == 'kr-holidays'",  # optional holiday features
+]
+[project.optional-dependencies]
+full = ["torch>=1.13", "holidayskr>=0.2"]
+
+[project.scripts]
+bellman-predict = "LGHackerton.predict:main"
+bellman-train   = "LGHackerton.train:main"
